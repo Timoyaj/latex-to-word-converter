@@ -10,6 +10,7 @@ and automatic equation numbering.
 import sys
 import os
 import re
+import subprocess
 import threading
 import queue
 from pathlib import Path
@@ -27,6 +28,20 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from core.converter import LatexToWordConverter
+from core.math_tokens import (
+    count_display_math, is_fence_line, fence_marker,
+    INLINE_DOLLAR_RE, INLINE_PAREN_RE,
+)
+
+
+def open_path(path: str):
+    """Cross-platform 'open in file manager / default app'."""
+    if sys.platform == "win32":
+        os.startfile(path)  # noqa: S606 — documented Windows shell API
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
 
 
 # ── colour palette ────────────────────────────────────────────────
@@ -150,6 +165,8 @@ class ConverterApp:
         # syntax-highlight tags
         self.editor.tag_configure("inline_math",  foreground=_MATH_FG)
         self.editor.tag_configure("display_math", foreground=_DISPLAY_FG)
+        self.editor.tag_configure("code_block", foreground="#9399b2",
+                                  background="#181825")
 
         self.editor.bind("<KeyRelease>", self._on_editor_change)
         self.editor.bind("<ButtonRelease-1>", self._on_editor_change)
@@ -290,35 +307,83 @@ class ConverterApp:
         # remove old tags
         self.editor.tag_remove("inline_math", "1.0", END)
         self.editor.tag_remove("display_math", "1.0", END)
+        self.editor.tag_remove("code_block", "1.0", END)
 
-        count = 0
+        lines = text.split("\n")
+        # absolute char offset of each line start (tk counts '\n' as 1 char)
+        line_starts = [0]
+        for ln in lines[:-1]:
+            line_starts.append(line_starts[-1] + len(ln) + 1)
 
-        # display math $$...$$
-        for m in re.finditer(r'\$\$(.+?)\$\$', text, re.DOTALL):
-            count += 1
-            start = f"1.0+{m.start()}c"
-            end = f"1.0+{m.end()}c"
-            self.editor.tag_add("display_math", start, end)
+        def tag_range(tag, start_char, end_char):
+            self.editor.tag_add(tag, f"1.0+{start_char}c", f"1.0+{end_char}c")
 
-        # inline math $...$  (not inside $$)
-        for m in re.finditer(r'(?<!\$)\$(?!\$)([^\$\n]+?)\$(?!\$)', text):
-            start = f"1.0+{m.start()}c"
-            end = f"1.0+{m.end()}c"
-            self.editor.tag_add("inline_math", start, end)
+        # ── code fences: tag and exclude from math scanning ──────
+        in_fence = False
+        fence_open = ""
+        fence_line_idx = set()
+        for idx, ln in enumerate(lines):
+            if is_fence_line(ln):
+                marker = fence_marker(ln)[0] * 3
+                if not in_fence:
+                    in_fence = True
+                    fence_open = marker
+                    fence_line_idx.add(idx)
+                elif marker[0] == fence_open[0]:
+                    in_fence = False
+                    fence_line_idx.add(idx)
+                continue
+            if in_fence:
+                fence_line_idx.add(idx)
+        for idx in sorted(fence_line_idx):
+            s = line_starts[idx]
+            e = s + len(lines[idx])
+            tag_range("code_block", s, e)
 
-        # count multiline $$ blocks too
+        # ── display math $$…$$ (single- and multi-line) ──────────
         in_block = False
-        for line in text.splitlines():
-            s = line.strip()
-            if s.startswith("$$") and not s.endswith("$$"):
-                in_block = True
+        block_start = 0
+        for idx, ln in enumerate(lines):
+            if idx in fence_line_idx:
+                continue
+            s = ln.strip()
+            if not in_block and s.startswith("$$"):
+                rest = s[2:].strip()
+                if rest.endswith("$$") and len(rest) >= 2:
+                    if rest[:-2].strip():
+                        # tag the whole line
+                        tag_range("display_math",
+                                  line_starts[idx], line_starts[idx] + len(ln))
+                else:
+                    in_block = True
+                    block_start = idx
             elif in_block and s.endswith("$$"):
                 in_block = False
-                count += 1
-            elif s.startswith("$$") and s.endswith("$$") and len(s) > 4:
-                pass  # already counted by regex above
+                tag_range("display_math",
+                          line_starts[block_start],
+                          line_starts[idx] + len(ln))
+        # \[ ... \] display blocks (single-line only for tagging simplicity)
+        for idx, ln in enumerate(lines):
+            if idx in fence_line_idx:
+                continue
+            s = ln.strip()
+            if s.startswith("\\[") and s.endswith("\\]") and len(s) > 3:
+                tag_range("display_math",
+                          line_starts[idx], line_starts[idx] + len(ln))
 
-        self._eq_count_var.set(f"{count} display equation{'s' if count != 1 else ''} detected")
+        # ── inline math via the shared tokenizer regexes ──────────
+        for idx, ln in enumerate(lines):
+            if idx in fence_line_idx:
+                continue
+            pos = line_starts[idx]
+            for m in INLINE_DOLLAR_RE.finditer(ln):
+                tag_range("inline_math", pos + m.start(), pos + m.end())
+            for m in INLINE_PAREN_RE.finditer(ln):
+                tag_range("inline_math", pos + m.start(), pos + m.end())
+
+        count = count_display_math(text)
+        self._eq_count_var.set(
+            f"{count} display equation{'s' if count != 1 else ''} detected")
 
     # ------------------------------------------------------------------
     # Conversion
@@ -384,13 +449,12 @@ class ConverterApp:
                         f"{f' ({fail} failed)' if fail else ''}. "
                         f"Saved to: {stats['output_path']}"
                     )
+                    for item in stats.get("failed_formulas", []):
+                        self._log(
+                            f"   ⚠ line {item['line']}: could not convert "
+                            f"{item['latex']!r} — kept as plain text"
+                        )
                     self._post_frame.pack(side="right")
-                    messagebox.showinfo(
-                        "Conversion Complete",
-                        f"Word document saved!\n\n"
-                        f"Equations: {ok}/{total} converted\n"
-                        f"Output: {stats['output_path']}"
-                    )
                 else:
                     self._log(f"❌ Error: {payload}")
                     messagebox.showerror("Conversion Error", str(payload))
@@ -403,13 +467,13 @@ class ConverterApp:
     # ------------------------------------------------------------------
     def _open_output_file(self):
         if self._last_output and os.path.isfile(self._last_output):
-            os.startfile(self._last_output)
+            open_path(self._last_output)
 
     def _open_output_folder(self):
         if self._last_output:
-            folder = os.path.dirname(self._last_output)
+            folder = os.path.dirname(os.path.abspath(self._last_output))
             if os.path.isdir(folder):
-                os.startfile(folder)
+                open_path(folder)
 
     # ------------------------------------------------------------------
     # Logging

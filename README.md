@@ -71,6 +71,10 @@ cd latex-to-word-converter
 pip install -r requirements.txt
 ```
 
+> **Note:** the bundled `core/MML2OMML.XSL` is used automatically. To point at
+> a different stylesheet (e.g. from an Office installation), set the
+> `LWX_MML2OMML_XSL` environment variable to its full path.
+
 ### 2. Launch the Desktop GUI
 
 ```bash
@@ -152,10 +156,18 @@ Located in [`macros/EquationAutoNumbering.bas`](macros/EquationAutoNumbering.bas
 
 | Macro Name | Description |
 | :--- | :--- |
-| **`RenumberAllEquations`** | Scans all 1×3 equation tables in the document and renumbers them sequentially from `(1)` to `(N)`. Essential after rearranging sections. |
+| **`ConvertAllLatexInDocument`** | Converts all `$$…$$` (including **multi-line** blocks) and `$…$` formulas to native Word equations. Currency amounts (`$5.00 … $10.00`) and escaped `\$` are never converted. Optional auto-numbering via **SEQ fields**. |
+| **`ConvertSelectionLatex`** | Converts only the currently selected LaTeX text into a Word equation. |
+| **`RenumberAllEquations`** | Renumbers all equation tables sequentially. Updates SEQ fields and legacy literal labels — preserving formats like `({n})`, `[Eq. {n}]`, `Eq. {n}` produced by the Python app. |
 | **`InsertEquationNumber`** | Inserts a borderless 3-column table at the cursor position with the next sequential equation number ready for manual entry. |
-| **`InsertEquationReference`** | Prompts for an equation number, validates its existence in the document, and inserts formatted text `Eq. (n)` at the cursor. |
+| **`InsertEquationReference`** | Prompts for an equation number and inserts a **live `REF` field** (`Eq. (n)`) that updates when equations are renumbered. |
 | **`CountEquations`** | Utility function returning the total count of numbered equation tables. |
+
+Equation tables are tagged with `EqTbl<n>` bookmarks and their number cells
+with `EqNum<n>` bookmarks, so cross-references stay correct across renumbering.
+Each macro run is a single undo step. See
+[`tests/fixtures/vba/manual_test_checklist.md`](tests/fixtures/vba/manual_test_checklist.md)
+for the Word acceptance script.
 
 ---
 
@@ -188,21 +200,62 @@ latex-to-word-converter/
 ├── core/                           # Core conversion library
 │   ├── __init__.py                 # Exports LatexToWordConverter
 │   ├── converter.py                # LaTeX/Markdown to OMML .docx engine
+│   ├── math_tokens.py              # Shared inline/display math tokenizer
 │   └── MML2OMML.XSL                # Microsoft MathML-to-OMML XSLT stylesheet
 ├── gui/                            # Desktop user interface
 │   ├── __init__.py
 │   └── app.py                      # Tkinter application with live syntax highlighting
 ├── macros/                         # Word automation
-│   └── EquationAutoNumbering.bas   # VBA macros for in-document renumbering
-├── examples/                       # Test suites & sample documents
+│   └── EquationAutoNumbering.bas   # VBA macros: convert, renumber, live cross-refs
+├── examples/                       # Sample documents
 │   ├── sample_equations.md         # Full Markdown test suite with 10 display equations
 │   └── sample_equations.docx       # Compiled native Word reference document
+├── tests/                          # Pytest suite & fixtures
+│   ├── fixtures/md/                # Markdown input fixtures
+│   ├── fixtures/expected/          # Structural goldens for generated docs
+│   ├── fixtures/vba/               # Word fixtures + manual macro checklist
+│   ├── test_math_tokens.py         # Tokenizer unit tests
+│   ├── test_clean_latex.py         # LaTeX cleaner unit tests
+│   ├── test_converter_docx.py      # Engine integration tests
+│   ├── test_cli.py                 # CLI tests
+│   └── test_gui_smoke.py           # GUI smoke tests (skip headless)
+├── .github/workflows/ci.yml        # GitHub Actions: pytest on Python 3.9–3.12
 ├── .gitignore                      # Python/Windows/Word gitignore rules
 ├── LICENSE                         # MIT License
 ├── main.py                         # Application entrypoint launcher
 ├── README.md                       # Comprehensive documentation
-└── requirements.txt                # Python package dependencies
+├── requirements.txt                # Python package dependencies
+└── requirements-dev.txt            # Test dependencies (pytest)
 ```
+
+---
+
+## 🧪 Testing & Fixtures
+
+The project ships with a pytest suite and a fixture pack under [`tests/`](tests/):
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests/
+```
+
+- `tests/fixtures/md/` — Markdown inputs covering inline/display math,
+  numbering formats, pipe tables with math, code fences, currency/escape edge
+  cases, and deliberate conversion failures.
+- `tests/fixtures/expected/` — structural goldens (equation counts, table
+  counts, numbering labels) asserted against the generated `.docx` XML.
+- `tests/fixtures/vba/` — Word documents plus a
+  [manual test checklist](tests/fixtures/vba/manual_test_checklist.md) for the
+  VBA macro suite (regenerate the documents with
+  `python tests/fixtures/vba/make_fixtures.py`).
+- `tests/test_math_tokens.py`, `tests/test_clean_latex.py` — unit tests for the
+  shared tokenizer and LaTeX cleaner (regression-locked for `$5.00` currency,
+  `\$` escapes, `\middle`, and `\mathbb` handling).
+- `tests/test_converter_docx.py`, `tests/test_cli.py`, `tests/test_gui_smoke.py`
+  — integration tests for the engine, CLI, and GUI (GUI tests skip headless).
+
+CI runs the suite on Python 3.9–3.12 via GitHub Actions
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ---
 

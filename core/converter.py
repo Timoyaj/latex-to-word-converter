@@ -23,6 +23,10 @@ from docx.oxml.ns import nsdecls, qn
 from lxml import etree
 from latex2mathml.converter import convert as latex2mathml_convert
 
+from core.math_tokens import (
+    split_inline_math, split_table_row, is_fence_line, fence_marker,
+)
+
 
 # ---------------------------------------------------------------------------
 # XSL resolution
@@ -30,15 +34,12 @@ from latex2mathml.converter import convert as latex2mathml_convert
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_DIR = os.path.dirname(_SCRIPT_DIR)
 
+# Explicit override first (useful for CI boxes and non-standard installs).
+_XSL_ENV_VAR = "LWX_MML2OMML_XSL"
+
 _XSL_CANDIDATES = [
     os.path.join(_SCRIPT_DIR, "MML2OMML.XSL"),
     os.path.join(_PROJECT_DIR, "MML2OMML.XSL"),
-    # Bundled with the academic-doc-extractor-docx skill
-    os.path.normpath(os.path.join(
-        os.path.expanduser("~"),
-        ".gemini", "config", "skills",
-        "academic-doc-extractor-docx", "scripts", "MML2OMML.XSL",
-    )),
     # System Office installation
     r"C:\Program Files\Microsoft Office\root\Office16\MML2OMML.XSL",
     r"C:\Program Files (x86)\Microsoft Office\root\Office16\MML2OMML.XSL",
@@ -47,6 +48,9 @@ _XSL_CANDIDATES = [
 
 def _resolve_xsl() -> Optional[str]:
     """Find the first available MML2OMML.XSL on the system."""
+    env_path = os.environ.get(_XSL_ENV_VAR, "").strip()
+    if env_path and os.path.isfile(env_path):
+        return env_path
     for path in _XSL_CANDIDATES:
         if os.path.isfile(path):
             return path
@@ -68,8 +72,8 @@ class LatexToWordConverter:
 
     def __init__(self):
         self.equation_counter: int = 0
-        self._stats = {"equations_total": 0, "equations_converted": 0,
-                        "equations_failed": 0, "output_path": ""}
+        self._stats = self._fresh_stats()
+        self._cur_line: int = 0
 
         self.xsl_path = _resolve_xsl()
         self.transform: Optional[etree.XSLT] = None
@@ -82,14 +86,24 @@ class LatexToWordConverter:
                 sys.stderr.write(
                     f"Warning: Could not load MML2OMML.XSL ({self.xsl_path}): {exc}\n")
 
+    @staticmethod
+    def _fresh_stats() -> dict:
+        return {
+            "equations_total": 0,
+            "equations_converted": 0,
+            "equations_failed": 0,
+            "failed_formulas": [],   # [{"line": int, "latex": str}, ...]
+            "output_path": "",
+        }
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     def reset(self):
         """Reset counters for a fresh document."""
         self.equation_counter = 0
-        self._stats = {"equations_total": 0, "equations_converted": 0,
-                        "equations_failed": 0, "output_path": ""}
+        self._stats = self._fresh_stats()
+        self._cur_line = 0
 
     def convert_markdown_to_docx(
         self,
@@ -109,55 +123,75 @@ class LatexToWordConverter:
         lines = markdown_content.splitlines()
         i = 0
         in_display_math = False
+        display_close = ""          # "$$" or "\\]" depending on opener
         display_math_buf: List[str] = []
         in_table = False
         table_buf: List[str] = []
+        in_code_fence = False
+        code_fence_marker = ""
+        code_buf: List[str] = []
 
         while i < len(lines):
             line = lines[i]
             stripped = line.strip()
+            self._cur_line = i + 1
 
-            # ── display math $$...$$ ──────────────────────────────
-            if stripped.startswith("$$"):
-                if not in_display_math:
-                    rest = stripped[2:].strip()
-                    if rest.endswith("$$") and len(rest) > 2:
-                        # single-line $$...$$
-                        self._add_display_equation(
-                            doc, rest[:-2].strip(), number_equations, eq_format)
-                        i += 1; continue
-                    elif rest.endswith("$$"):
-                        # $$  $$ on same line (empty)
-                        i += 1; continue
-                    else:
-                        in_display_math = True
-                        display_math_buf = [rest] if rest else []
-                        i += 1; continue
-                else:
-                    # closing $$
-                    in_display_math = False
-                    before = stripped
-                    if before.endswith("$$"):
-                        before = before[:-2]
-                    if before.startswith("$$"):
-                        before = before[2:]
-                    display_math_buf.append(before.strip())
-                    formula = " ".join(b for b in display_math_buf if b)
-                    self._add_display_equation(
-                        doc, formula, number_equations, eq_format)
-                    display_math_buf = []
-                    i += 1; continue
+            # ── fenced code blocks (``` / ~~~) ─────────────────────
+            if is_fence_line(line):
+                marker = fence_marker(line)[0] * 3
+                if not in_code_fence:
+                    in_code_fence = True
+                    code_fence_marker = marker
+                    code_buf = []
+                elif marker[0] == code_fence_marker[0]:
+                    in_code_fence = False
+                    self._add_code_block(doc, code_buf)
+                    code_buf = []
+                i += 1; continue
+            if in_code_fence:
+                code_buf.append(line)
+                i += 1; continue
 
+            # ── inside display math ($$…$$ or \[…\]) ──────────────
             if in_display_math:
-                if stripped.endswith("$$"):
+                if stripped.endswith(display_close):
                     in_display_math = False
-                    display_math_buf.append(stripped[:-2].strip())
+                    display_math_buf.append(stripped[:-len(display_close)].strip())
                     formula = " ".join(b for b in display_math_buf if b)
                     self._add_display_equation(
                         doc, formula, number_equations, eq_format)
                     display_math_buf = []
                 else:
                     display_math_buf.append(stripped)
+                i += 1; continue
+
+            # ── display math opener: $$...$$ ──────────────────────
+            if stripped.startswith("$$"):
+                rest = stripped[2:].strip()
+                if rest.endswith("$$") and len(rest) > 2:
+                    # single-line $$...$$
+                    self._add_display_equation(
+                        doc, rest[:-2].strip(), number_equations, eq_format)
+                elif not rest.endswith("$$"):
+                    # multi-line: accumulate until closing $$
+                    in_display_math = True
+                    display_close = "$$"
+                    display_math_buf = [rest] if rest else []
+                # else: bare "$$  $$" empty pair — skip
+                i += 1; continue
+
+            # ── display math opener: \[ ... \] ────────────────────
+            if stripped.startswith("\\["):
+                rest = stripped[2:].strip()
+                if rest.endswith("\\]") and len(rest) >= 2:
+                    formula = rest[:-2].strip()
+                    if formula:
+                        self._add_display_equation(
+                            doc, formula, number_equations, eq_format)
+                else:
+                    in_display_math = True
+                    display_close = "\\]"
+                    display_math_buf = [rest] if rest else []
                 i += 1; continue
 
             # ── markdown table ────────────────────────────────────
@@ -199,9 +233,14 @@ class LatexToWordConverter:
             elif stripped.startswith("> "):
                 self._add_blockquote(doc, stripped[2:].strip())
 
-            # ── bullet / numbered list items ──────────────────────
-            elif stripped.startswith("- ") or stripped.startswith("* "):
-                self._add_list_item(doc, stripped[2:].strip())
+            # ── bullet list items (-, *, +) ───────────────────────
+            elif re.match(r'^[-*+] ', stripped):
+                self._add_list_item(doc, stripped[2:].strip(), numbered=False)
+
+            # ── numbered list items (1. / 1) ) ────────────────────
+            elif re.match(r'^\d+[.)] ', stripped):
+                self._add_list_item(
+                    doc, re.sub(r'^\d+[.)] ', '', stripped), numbered=True)
 
             # ── normal paragraph ──────────────────────────────────
             else:
@@ -221,33 +260,48 @@ class LatexToWordConverter:
     # LaTeX → OMML conversion
     # ------------------------------------------------------------------
     def latex_to_omml(self, latex_code: str, is_display: bool = True) -> Optional[OxmlElement]:
-        """Convert a LaTeX string to a native Word OMML XML element."""
+        """Convert a LaTeX string to a native Word OMML XML element.
+
+        Two-pass strategy: convert the minimally-cleaned formula first so
+        fidelity-preserving constructs (``\\mathbb``, ``\\text``) survive;
+        if that fails, retry with the legacy compatibility rewrites.
+        """
         if not self.transform:
             return None
-        try:
-            clean = self._clean_latex(latex_code)
-            if not clean:
-                return None
-
-            mathml_str = latex2mathml_convert(clean)
-            mathml_tree = etree.fromstring(mathml_str.encode("utf-8"))
-            omml_tree = self.transform(mathml_tree)
-            omml_root = omml_tree.getroot()
-
-            xml_bytes = etree.tostring(omml_root, encoding="unicode")
-
-            if is_display and "oMathPara" not in xml_bytes:
-                xml_bytes = (
-                    '<m:oMathPara xmlns:m='
-                    '"http://schemas.openxmlformats.org/officeDocument/2006/math">'
-                    f'{xml_bytes}</m:oMathPara>'
-                )
-
-            return parse_xml(xml_bytes)
-        except Exception as exc:
-            preview = latex_code[:40].replace("\n", " ")
-            sys.stderr.write(f"OMML conversion failed for '{preview}…': {exc}\n")
+        clean = self._clean_latex(latex_code)
+        if not clean:
             return None
+
+        attempts = [clean]
+        legacy = self._legacy_compat_latex(clean)
+        if legacy != clean:
+            attempts.append(legacy)
+
+        last_exc: Optional[Exception] = None
+        for attempt in attempts:
+            try:
+                mathml_str = latex2mathml_convert(attempt)
+                mathml_tree = etree.fromstring(mathml_str.encode("utf-8"))
+                omml_tree = self.transform(mathml_tree)
+                omml_root = omml_tree.getroot()
+
+                xml_bytes = etree.tostring(omml_root, encoding="unicode")
+
+                if is_display and "oMathPara" not in xml_bytes:
+                    xml_bytes = (
+                        '<m:oMathPara xmlns:m='
+                        '"http://schemas.openxmlformats.org/officeDocument/2006/math">'
+                        f'{xml_bytes}</m:oMathPara>'
+                    )
+
+                return parse_xml(xml_bytes)
+            except Exception as exc:
+                last_exc = exc
+
+        preview = latex_code[:40].replace("\n", " ")
+        sys.stderr.write(
+            f"OMML conversion failed for '{preview}…': {last_exc}\n")
+        return None
 
     # ------------------------------------------------------------------
     # Document styles
@@ -273,30 +327,37 @@ class LatexToWordConverter:
     # Inline paragraph with math
     # ------------------------------------------------------------------
     def add_formatted_paragraph(self, doc: Document, text: str):
-        """Add paragraph with mixed text and inline $…$ OMML math."""
+        """Add paragraph with mixed text and inline $…$ / \\(…\\) OMML math."""
         p = doc.add_paragraph()
         p.paragraph_format.line_spacing = 1.15
         p.paragraph_format.space_after = Pt(6)
+        self._emit_inline_tokens(p, text)
 
-        pattern = re.compile(r'(\$[^\$\n]+?\$)')
-        tokens = pattern.split(text)
-
-        for token in tokens:
-            if not token:
-                continue
-            if token.startswith("$") and token.endswith("$") and len(token) > 2:
+    def _emit_inline_tokens(self, paragraph, text: str):
+        """Append text/math/code runs to *paragraph* via the shared tokenizer."""
+        for token in split_inline_math(text):
+            if token.kind == "math":
                 self._stats["equations_total"] += 1
-                omml = self.latex_to_omml(token, is_display=False)
+                omml = self.latex_to_omml(token.value, is_display=False)
                 if omml is not None:
-                    p._p.append(omml)
+                    paragraph._p.append(omml)
                     self._stats["equations_converted"] += 1
                 else:
-                    run = p.add_run(token[1:-1])
+                    run = paragraph.add_run(token.value)
                     run.italic = True
                     run.font.name = "Cambria Math"
                     self._stats["equations_failed"] += 1
+                    self._record_failure(token.value)
+            elif token.kind == "code":
+                run = paragraph.add_run(token.value.strip("`"))
+                run.font.name = "Consolas"
+                run.font.size = Pt(10.5)
             else:
-                self._add_rich_text_runs(p, token)
+                self._add_rich_text_runs(paragraph, token.value)
+
+    def _record_failure(self, latex_code: str):
+        self._stats["failed_formulas"].append(
+            {"line": self._cur_line, "latex": latex_code[:80]})
 
     # ------------------------------------------------------------------
     # Display equations with auto-numbering
@@ -324,6 +385,7 @@ class LatexToWordConverter:
             else:
                 self._fallback_equation_text(p, formula)
                 self._stats["equations_failed"] += 1
+                self._record_failure(formula)
 
     def _add_numbered_equation(
         self, doc: Document, omml_elem, formula: str, eq_label: str
@@ -349,18 +411,9 @@ class LatexToWordConverter:
         eq_p.paragraph_format.space_before = Pt(4)
         eq_p.paragraph_format.space_after = Pt(4)
         if omml_elem is not None:
-            # For display math inside a table cell, use oMath (not oMathPara)
-            xml_str = etree.tostring(
-                omml_elem if hasattr(omml_elem, 'tag') else omml_elem,
-                encoding="unicode"
-            )
-            # Unwrap oMathPara if present — inside a table cell we just need oMath
-            xml_str = re.sub(
-                r'<m:oMathPara[^>]*>(.*?)</m:oMathPara>',
-                r'\1', xml_str, flags=re.DOTALL
-            )
+            # For display math inside a table cell, unwrap oMathPara → oMath
+            inner = self._unwrap_omathpara(omml_elem)
             try:
-                inner = parse_xml(xml_str)
                 eq_p._p.append(inner)
             except Exception:
                 eq_p._p.append(omml_elem)
@@ -368,6 +421,7 @@ class LatexToWordConverter:
         else:
             self._fallback_equation_text(eq_p, formula)
             self._stats["equations_failed"] += 1
+            self._record_failure(formula)
 
         # ── right cell: equation number ──
         num_cell = tbl.cell(0, 2)
@@ -384,6 +438,23 @@ class LatexToWordConverter:
         left_p.paragraph_format.space_before = Pt(4)
         left_p.paragraph_format.space_after = Pt(4)
 
+    @staticmethod
+    def _unwrap_omathpara(omml_elem):
+        """Return the inner m:oMath of an m:oMathPara (table-cell safe).
+
+        Unlike a regex over serialized XML, extracting the child element
+        keeps all namespace declarations intact when the child is
+        re-serialized or appended elsewhere.
+        """
+        try:
+            if etree.QName(omml_elem).localname == "oMathPara":
+                for child in omml_elem:
+                    if etree.QName(child).localname == "oMath":
+                        return child
+        except Exception:
+            pass
+        return omml_elem
+
     # ------------------------------------------------------------------
     # Markdown table → Word table
     # ------------------------------------------------------------------
@@ -396,7 +467,8 @@ class LatexToWordConverter:
                 continue
             if re.match(r'^\|?[\s\:\-]+(?:\|[\s\:\-]+)*\|?$', line):
                 continue
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            # math-aware split: $|x|$ keeps its pipes, \| stays literal
+            cells = [c.strip() for c in split_table_row(line)]
             rows_data.append(cells)
 
         if not rows_data:
@@ -417,22 +489,27 @@ class LatexToWordConverter:
                 cell_p.paragraph_format.space_after = Pt(2)
                 cell_p.paragraph_format.space_before = Pt(2)
 
-                tokens = re.split(r'(\$[^\$\n]+?\$)', val)
-                for token in tokens:
-                    if not token:
-                        continue
-                    if token.startswith("$") and token.endswith("$") and len(token) > 2:
+                for token in split_inline_math(val):
+                    if token.kind == "math":
                         self._stats["equations_total"] += 1
-                        omml = self.latex_to_omml(token, is_display=False)
+                        omml = self.latex_to_omml(token.value, is_display=False)
                         if omml is not None:
                             cell_p._p.append(omml)
                             self._stats["equations_converted"] += 1
                         else:
-                            r = cell_p.add_run(token[1:-1])
+                            r = cell_p.add_run(token.value)
                             r.italic = True
                             self._stats["equations_failed"] += 1
+                            self._record_failure(token.value)
+                    elif token.kind == "code":
+                        r = cell_p.add_run(token.value.strip("`"))
+                        r.font.name = "Consolas"
+                        r.font.size = Pt(9.5)
+                        if r_idx == 0:
+                            r.font.bold = True
                     else:
-                        r = cell_p.add_run(token)
+                        # text: \| is a literal pipe in table cells
+                        r = cell_p.add_run(token.value.replace("\\|", "|"))
                         if r_idx == 0:
                             r.font.bold = True
 
@@ -499,30 +576,35 @@ class LatexToWordConverter:
         p = doc.add_paragraph()
         p.paragraph_format.left_indent = Inches(0.5)
         p.paragraph_format.right_indent = Inches(0.5)
-        r = p.add_run(text)
-        r.italic = True; r.font.size = Pt(11)
+        self._emit_inline_tokens(p, text)
+        for r in p.runs:
+            r.italic = True
+            if r.font.size is None:
+                r.font.size = Pt(11)
 
-    def _add_list_item(self, doc, text):
-        p = doc.add_paragraph(style="List Bullet")
+    def _add_list_item(self, doc, text, numbered=False):
+        style = "List Number" if numbered else "List Bullet"
+        p = doc.add_paragraph(style=style)
         # clear auto-generated run and use formatted paragraph logic
         p.text = ""
-        pattern = re.compile(r'(\$[^\$\n]+?\$)')
-        tokens = pattern.split(text)
-        for token in tokens:
-            if not token:
-                continue
-            if token.startswith("$") and token.endswith("$") and len(token) > 2:
-                self._stats["equations_total"] += 1
-                omml = self.latex_to_omml(token, is_display=False)
-                if omml is not None:
-                    p._p.append(omml)
-                    self._stats["equations_converted"] += 1
-                else:
-                    r = p.add_run(token[1:-1])
-                    r.italic = True
-                    self._stats["equations_failed"] += 1
-            else:
-                self._add_rich_text_runs(p, token)
+        self._emit_inline_tokens(p, text)
+
+    def _add_code_block(self, doc, code_lines):
+        """Render a fenced code block as monospaced, lightly-shaded paragraphs."""
+        for raw in code_lines:
+            p = doc.add_paragraph()
+            p.paragraph_format.line_spacing = 1.0
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.left_indent = Inches(0.25)
+            run = p.add_run(raw if raw else " ")
+            run.font.name = "Consolas"
+            run.font.size = Pt(9.5)
+            shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="F5F5F5"/>')
+            p._p.get_or_add_pPr().append(shading)
+        # small spacer after the block
+        sp = doc.add_paragraph()
+        sp.paragraph_format.space_after = Pt(4)
 
     # ------------------------------------------------------------------
     # Text formatting helpers
@@ -560,7 +642,14 @@ class LatexToWordConverter:
     # ------------------------------------------------------------------
     @staticmethod
     def _clean_latex(latex_code: str) -> str:
-        """Sanitise LaTeX for latex2mathml compatibility."""
+        """Strip delimiters and apply only *safe* normalisations.
+
+        Deliberately conservative: modern latex2mathml handles ``\\mathbb``,
+        ``\\text`` and ``\\operatorname`` natively, so we must NOT rewrite
+        them here (rewriting ``\\mathbb{R}`` to ``\\mathbf{R}`` loses the
+        blackboard-bold glyph). Word-boundary regexes keep ``\\middle`` safe
+        from the ``\\mid`` → ``|`` normalisation.
+        """
         s = latex_code.strip()
         # strip delimiters
         if s.startswith("$$") and s.endswith("$$"):
@@ -568,25 +657,31 @@ class LatexToWordConverter:
         elif s.startswith("$") and s.endswith("$"):
             s = s[1:-1].strip()
 
-        # common substitutions for latex2mathml compatibility
-        s = s.replace(r"\mid", "|")
-        s = s.replace(r"\mathbb", r"\mathbf")
-        # \text{...} → \mathrm{...}
+        # \mid → | but never \middle (word-boundary aware)
+        s = re.sub(r'\\mid(?![a-zA-Z])', '|', s)
+        return s
+
+    @staticmethod
+    def _legacy_compat_latex(latex_code: str) -> str:
+        """Second-chance compatibility pass for older latex2mathml builds.
+
+        Only applied when the native conversion of ``_clean_latex`` output
+        fails. Keeps documents convertible at the cost of some fidelity
+        (e.g. \\mathbb is demoted to \\mathbf).
+        """
+        s = latex_code
+        s = re.sub(r'\\mathbb(?![a-zA-Z])', r'\\mathbf', s)
         s = re.sub(r'\\text\{([^}]*)\}', r'\\mathrm{\1}', s)
-        # \operatorname{sin} → \sin   (for known operators)
         known_ops = ["sin", "cos", "tan", "log", "ln", "exp", "det",
                      "max", "min", "sup", "inf", "lim", "arg", "deg"]
         for op in known_ops:
             s = s.replace(f"\\operatorname{{{op}}}", f"\\{op}")
-        # remaining \operatorname → \mathrm
         s = re.sub(r'\\operatorname\{([^}]*)\}', r'\\mathrm{\1}', s)
-        # \, spacing → thin space (just remove, latex2mathml handles it)
         s = s.replace(r"\,", " ")
         s = s.replace(r"\;", " ")
         s = s.replace(r"\!", "")
         s = s.replace(r"\quad", "  ")
         s = s.replace(r"\qquad", "    ")
-
         return s
 
     # ------------------------------------------------------------------

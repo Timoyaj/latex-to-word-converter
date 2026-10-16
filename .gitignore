@@ -32,6 +32,10 @@ venv/
 ENV/
 env/
 
+# Test / cache artifacts
+.pytest_cache/
+.mypy_cache/
+
 # IDE & editors
 .vscode/
 .idea/
