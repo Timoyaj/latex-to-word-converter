@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LaTeX → Word Converter — UI Preview</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --editor-bg:#1e1e2e; --editor-fg:#cdd6f4;
+    --gutter-bg:#181825; --gutter-fg:#6c7086; --line-hl:#2a2a3d;
+    --math-fg:#f9e2af; --display-fg:#a6e3a1; --accent:#1d4ed8;
+    --accent-hov:#2563eb; --log-bg:#f1f5f9; --code-fg:#9399b2;
+    --code-bg:#181825; --muted:#64748b; --counter:#6366f1;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:#e2e8f0; font-family:"Segoe UI", system-ui, sans-serif;
+    display:flex; flex-direction:column; align-items:center; gap:12px;
+    padding:18px 12px; min-height:100vh;
+  }
+  .banner{
+    background:#fef9c3; border:1px solid #eab308; color:#713f12;
+    padding:8px 14px; border-radius:8px; font-size:12.5px; max-width:980px;
+  }
+  .window{
+    width:980px; max-width:100%; height:780px; background:var(--bg);
+    border-radius:10px; box-shadow:0 12px 40px rgba(15,23,42,.25);
+    display:flex; flex-direction:column; padding:10px; gap:6px; overflow:hidden;
+    position:relative;
+  }
+  /* ── menu bar ──────────────────────────────── */
+  .menubar{display:flex; gap:2px; padding:0 2px 2px;}
+  .menu-item{position:relative;}
+  .menu-item>button{
+    border:none; background:transparent; font-size:12.5px;
+    padding:5px 11px; border-radius:6px;
+  }
+  .menu-item>button:hover, .menu-item.open>button{background:#e2e8f0;}
+  .dropdown{
+    display:none; position:absolute; top:100%; left:0; z-index:50;
+    background:#fff; border:1px solid #d8dee9; border-radius:8px;
+    box-shadow:0 10px 24px rgba(15,23,42,.18); min-width:210px; padding:5px;
+  }
+  .menu-item.open .dropdown{display:block;}
+  .dropdown button{
+    display:flex; justify-content:space-between; gap:18px; width:100%;
+    border:none; background:transparent; text-align:left; font-size:12px;
+    padding:7px 10px; border-radius:6px;
+  }
+  .dropdown button:hover{background:#eef2ff; color:var(--accent);}
+  .dropdown button .key{color:var(--muted); font-size:10.5px;}
+  .dropdown .sep{height:1px; background:#e2e8f0; margin:5px 6px;}
+  /* ── title bar ─────────────────────────────── */
+  .titlebar{display:flex; align-items:baseline; gap:12px; padding:2px 4px 4px;}
+  .titlebar h1{font-size:17px; font-weight:700; color:#0f172a;}
+  .titlebar .sub{font-size:9px; color:var(--muted);}
+  /* ── toolbar ───────────────────────────────── */
+  .toolbar{display:flex; align-items:center; gap:4px;}
+  .toolbar .sep{width:1px; height:22px; background:#cbd5e1; margin:0 8px;}
+  button{
+    font-family:inherit; font-size:12px; padding:6px 10px; border-radius:6px;
+    border:1px solid #cbd5e1; background:#fff; color:#0f172a; cursor:pointer;
+  }
+  button:hover{background:#f1f5f9;}
+  select{
+    font-family:inherit; font-size:12px; padding:6px 8px; border-radius:6px;
+    border:1px solid #cbd5e1; background:#fff; color:#0f172a; width:170px;
+  }
+  .counter{margin-left:auto; font-size:9px; color:var(--counter);}
+  /* ── find bar ──────────────────────────────── */
+  .findbar{
+    display:none; align-items:center; gap:6px; background:var(--find-bg,#eef2ff);
+    border:1px solid #c7d2fe; border-radius:8px; padding:6px 10px; font-size:12px;
+  }
+  .findbar.on{display:flex;}
+  .findbar input{
+    font-family:inherit; font-size:12px; padding:5px 8px;
+    border:1px solid #cbd5e1; border-radius:6px;
+  }
+  .findbar .fstatus{color:var(--muted); font-size:11px; margin-left:6px;}
+  /* ── editor ────────────────────────────────── */
+  .frame{
+    border:1px solid #d8dee9; border-radius:8px; background:#fff;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  .frame>.cap{
+    font-size:11px; color:#334155; padding:4px 10px 2px; font-weight:600;
+  }
+  .editor-row{flex:1; display:flex; min-height:0; padding:4px; gap:0;}
+  #gutter{
+    background:var(--gutter-bg); color:var(--gutter-fg);
+    font-family:Consolas,"Courier New",monospace; font-size:11px;
+    line-height:1.5; padding:8px 6px 8px 10px; text-align:right;
+    overflow:hidden; user-select:none; white-space:pre;
+    border-radius:4px 0 0 4px;
+  }
+  .code-wrap{position:relative; flex:1; overflow:hidden;}
+  #highlight{
+    position:absolute; top:0; left:0; padding:8px 6px; margin:0;
+    font-family:Consolas,"Courier New",monospace; font-size:11px;
+    line-height:1.5; white-space:pre; pointer-events:none;
+    color:var(--editor-fg); min-width:100%; min-height:100%;
+  }
+  #highlight .inline_math{color:var(--math-fg);}
+  #highlight .display_math{color:var(--display-fg);}
+  #highlight .code_block{color:var(--code-fg); background:var(--code-bg);}
+  #highlight .curline{background:var(--line-hl);}
+  #editor{
+    position:absolute; inset:0; width:100%; height:100%;
+    background:transparent; color:transparent; caret-color:#f5f5f5;
+    border:none; outline:none; resize:none; z-index:1;
+    font-family:Consolas,"Courier New",monospace; font-size:11px;
+    line-height:1.5; padding:8px 6px; white-space:pre; overflow:auto;
+  }
+  #editor::selection{background:#45475a; color:transparent;}
+  /* ── options ───────────────────────────────── */
+  .opt-row{display:flex; align-items:center; gap:8px; padding:4px 10px 6px; font-size:12px;}
+  .opt-row label{display:flex; align-items:center; gap:6px;}
+  .opt-row input[type=text]{
+    font-family:inherit; font-size:12px; padding:5px 8px;
+    border:1px solid #cbd5e1; border-radius:6px;
+  }
+  #eqFmt{width:80px;}
+  #output{width:330px;}
+  input:disabled{background:#e2e8f0; color:#94a3b8;}
+  /* ── actions ───────────────────────────────── */
+  .actions{display:flex; align-items:center; gap:12px; padding:2px 4px;}
+  .convert{
+    background:var(--accent); color:#fff; border:none;
+    font-family:"Segoe UI Semibold","Segoe UI",sans-serif; font-size:12px;
+    font-weight:600; padding:11px 18px; border-radius:6px;
+  }
+  .convert:hover{background:var(--accent-hov);}
+  .convert:disabled{opacity:.6; cursor:default;}
+  .progress{
+    width:180px; height:8px; border-radius:6px; background:#e2e8f0;
+    overflow:hidden; display:none;
+  }
+  .progress.on{display:block;}
+  .progress .bar{
+    height:100%; width:40%; border-radius:6px; background:var(--accent);
+    animation:slide 0.8s linear infinite;
+  }
+  @keyframes slide{0%{margin-left:-40%;}100%{margin-left:100%;}}
+  .post{display:none; gap:4px; margin-left:auto;}
+  .post.on{display:flex;}
+  /* ── log & status ──────────────────────────── */
+  .log{
+    height:92px; overflow:auto; background:var(--log-bg); color:#334155;
+    font-family:Consolas,"Courier New",monospace; font-size:9px;
+    padding:6px 8px; border-radius:4px; margin:4px; white-space:pre-wrap;
+  }
+  .statusbar{
+    display:flex; justify-content:space-between; padding:2px 6px;
+    font-size:9px; color:var(--muted);
+  }
+</style>
+</head>
+<body>
+<div class="banner">
+  ⚠ <strong>UI preview</strong> — faithful, interactive replica of the enhanced Tkinter app
+  (<code>gui/app.py</code>): menus, find/replace, line numbers, status bar, and settings
+  persistence (draft saved in localStorage). Highlighting and counts use the app’s real
+  tokenizer rules. <strong>Conversion is simulated</strong>; the real app runs via
+  <code>python main.py</code> on a desktop.
+</div>
+
+<div class="window" id="win">
+  <!-- ── menu bar ───────────────────────────── -->
+  <div class="menubar">
+    <div class="menu-item" data-menu>
+      <button>File</button>
+      <div class="dropdown">
+        <button onclick="openFile()"><span>Open File…</span><span class="key">Ctrl+O</span></button>
+        <button onclick="browseOutput()"><span>Save Output As…</span><span class="key">Ctrl+S</span></button>
+        <div class="sep"></div>
+        <button onclick="logLine('Exit is disabled in the UI preview.')"><span>Exit</span></button>
+      </div>
+    </div>
+    <div class="menu-item" data-menu>
+      <button>Edit</button>
+      <div class="dropdown">
+        <button onclick="document.execCommand('undo')"><span>Undo</span><span class="key">Ctrl+Z</span></button>
+        <button onclick="document.execCommand('redo')"><span>Redo</span><span class="key">Ctrl+Y</span></button>
+        <div class="sep"></div>
+        <button onclick="document.execCommand('cut')"><span>Cut</span></button>
+        <button onclick="document.execCommand('copy')"><span>Copy</span></button>
+        <button onclick="pasteText()"><span>Paste</span></button>
+        <div class="sep"></div>
+        <button onclick="toggleFind(true)"><span>Find / Replace…</span><span class="key">Ctrl+F</span></button>
+        <button onclick="findNext()"><span>Find Next</span><span class="key">F3</span></button>
+        <button onclick="clearEditor()"><span>Clear Editor</span></button>
+      </div>
+    </div>
+    <div class="menu-item" data-menu>
+      <button>Insert</button>
+      <div class="dropdown" id="insertMenu"></div>
+    </div>
+    <div class="menu-item" data-menu>
+      <button>Help</button>
+      <div class="dropdown">
+        <button onclick="aboutDlg()"><span>About</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── title bar ──────────────────────────── -->
+  <div class="titlebar">
+    <h1>LaTeX → Word Converter</h1>
+    <div class="sub">Native editable OMML equations · v1.1</div>
+  </div>
+
+  <!-- ── toolbar ────────────────────────────── -->
+  <div class="toolbar">
+    <button onclick="openFile()">📂 Open</button>
+    <button onclick="pasteText()">📋 Paste</button>
+    <button onclick="toggleFind()">🔍 Find</button>
+    <button onclick="clearEditor()">🗑 Clear</button>
+    <div class="sep"></div>
+    <select id="tpl" onchange="insertTemplate()">
+      <option value="">Insert Template…</option>
+    </select>
+    <div class="counter" id="counter">0 display equations detected</div>
+    <input type="file" id="fileInput" accept=".md,.tex,.txt" style="display:none">
+  </div>
+
+  <!-- ── find & replace bar ─────────────────── -->
+  <div class="findbar" id="findbar">
+    <span>Find:</span><input id="findText" size="22">
+    <span>Replace:</span><input id="replText" size="16">
+    <button onclick="findNext()">▲</button>
+    <button onclick="findNext(true)">▼</button>
+    <button onclick="replaceCurrent()">Replace</button>
+    <button onclick="replaceAll()">All</button>
+    <span class="fstatus" id="findStatus"></span>
+    <button style="margin-left:auto" onclick="toggleFind(false)">✕</button>
+  </div>
+
+  <!-- ── editor ─────────────────────────────── -->
+  <div class="frame" style="flex:1; min-height:0;">
+    <div class="cap">LaTeX / Markdown Input</div>
+    <div class="editor-row">
+      <div id="gutter">1</div>
+      <div class="code-wrap">
+        <pre id="highlight"></pre>
+        <textarea id="editor" spellcheck="false"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── options ────────────────────────────── -->
+  <div class="frame">
+    <div class="cap">Conversion Options</div>
+    <div class="opt-row">
+      <label><input type="checkbox" id="autonumber" checked onchange="toggleFmt()"> Auto-number equations</label>
+      <span>Format:</span>
+      <input type="text" id="eqFmt" value="({n})">
+      <label style="margin-left:14px"><input type="checkbox" id="autopen"> Open file after conversion</label>
+    </div>
+    <div class="opt-row">
+      <span>Output file:</span>
+      <input type="text" id="output" placeholder="output.docx">
+      <button onclick="browseOutput()">Browse…</button>
+    </div>
+  </div>
+
+  <!-- ── actions ────────────────────────────── -->
+  <div class="actions">
+    <button class="convert" id="convertBtn" onclick="convert()">⚡&nbsp; Convert to Word&nbsp;&nbsp;(Ctrl+Return)</button>
+    <div class="progress" id="progress"><div class="bar"></div></div>
+    <div class="post" id="post">
+      <button onclick="logLine('Open File is unavailable in the UI preview (browser sandbox).')">📄 Open File</button>
+      <button onclick="logLine('Open Folder is unavailable in the UI preview (browser sandbox).')">📁 Open Folder</button>
+    </div>
+  </div>
+
+  <!-- ── log ────────────────────────────────── -->
+  <div class="frame">
+    <div class="cap">Status Log</div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <!-- ── status bar ─────────────────────────── -->
+  <div class="statusbar">
+    <span id="statusLeft">untitled &nbsp;·&nbsp; Ln 1, Col 1 &nbsp;·&nbsp; 0 words, 0 chars</span>
+    <span id="statusRight">0 display · 0 inline</span>
+  </div>
+</div>
+
+<script>
+/* ═══ Port of core/math_tokens.py — same rules as the app ═══ */
+const INLINE_DOLLAR_RE = /(?<![\\$])\$(?!\$)(?!\s)([^$\n]+?)(?<!\s)\$(?![0-9])/g;
+const INLINE_PAREN_RE  = /\\\(([^$\n]+?)\\\)/g;
+
+const TEMPLATES = {
+  "Fraction": "$$\\frac{a}{b}$$",
+  "Summation": "$$\\sum_{i=1}^{n} x_i$$",
+  "Integral": "$$\\int_{a}^{b} f(x)\\, dx$$",
+  "Matrix (2×2)": "$$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$$",
+  "Square root": "$$\\sqrt{a^2 + b^2}$$",
+  "Greek inline": "$\\alpha, \\beta, \\gamma, \\theta$",
+  "Superscript / subscript": "$x_{i}^{2} + y_{j}^{3}$",
+};
+
+const $ = id => document.getElementById(id);
+const editor = $("editor"), highlight = $("highlight"), gutter = $("gutter");
+
+/* templates: toolbar select + Insert menu */
+for (const name of Object.keys(TEMPLATES)) {
+  const o = document.createElement("option");
+  o.value = name; o.textContent = name;
+  $("tpl").appendChild(o);
+  const b = document.createElement("button");
+  b.innerHTML = `<span>${name}</span>`;
+  b.onclick = () => insertTemplateByName(name);
+  $("insertMenu").appendChild(b);
+}
+
+/* menu open/close */
+document.querySelectorAll("[data-menu]>button").forEach(btn => {
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    const item = btn.parentElement, was = item.classList.contains("open");
+    document.querySelectorAll("[data-menu]").forEach(m => m.classList.remove("open"));
+    if (!was) item.classList.add("open");
+  });
+});
+document.addEventListener("click", () =>
+  document.querySelectorAll("[data-menu]").forEach(m => m.classList.remove("open")));
+
+function isFenceLine(line){ return /^\s*(`{3,}|~{3,})/.test(line); }
+
+function fenceSet(lines){
+  const set = new Set(); let inF = false, openCh = "";
+  for (let i = 0; i < lines.length; i++){
+    const m = lines[i].match(/^\s*(`{3,}|~{3,})/);
+    if (m){
+      const ch = m[1][0];
+      if (!inF){ inF = true; openCh = ch; set.add(i); }
+      else if (ch === openCh){ inF = false; set.add(i); }
+      continue;
+    }
+    if (inF) set.add(i);
+  }
+  return set;
+}
+
+function countDisplay(text){
+  const lines = text.split("\n"), fence = fenceSet(lines);
+  const kept = lines.filter((_, i) => !fence.has(i));
+  let n = 0, inBlock = false;
+  for (const ln of kept){
+    const s = ln.trim();
+    if (!inBlock && s.startsWith("$$")){
+      const rest = s.slice(2).trim();
+      if (rest.endsWith("$$") && rest.length >= 2){ if (rest.slice(0,-2).trim()) n++; }
+      else inBlock = true;
+    } else if (inBlock && s.endsWith("$$")){ inBlock = false; n++; }
+    if (s.startsWith("\\[") && s.endsWith("\\]") && s.length > 3) n++;
+  }
+  return n;
+}
+
+function countInline(lines, fence){
+  let n = 0;
+  for (let i = 0; i < lines.length; i++){
+    if (fence.has(i)) continue;
+    for (const re of [INLINE_DOLLAR_RE, INLINE_PAREN_RE]){
+      re.lastIndex = 0;
+      for (const _ of lines[i].matchAll(re)) n++;
+    }
+  }
+  return n;
+}
+
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function render(){
+  const text = editor.value;
+  const lines = text.split("\n");
+  const fence = fenceSet(lines);
+  const spans = [];
+
+  let off = 0;
+  for (let i = 0; i < lines.length; i++){
+    const ln = lines[i];
+    if (fence.has(i)) spans.push({start:off, end:off+ln.length, cls:"code_block"});
+    else {
+      const s = ln.trim();
+      if (s.startsWith("$$")){
+        const rest = s.slice(2).trim();
+        if (!(rest.endsWith("$$") && rest.length >= 2)) {
+          let j = i+1;
+          while (j < lines.length && !lines[j].trim().endsWith("$$")) j++;
+          if (j < lines.length){
+            let endOff = off;
+            for (let k = i; k <= j; k++) endOff += lines[k].length + (k<j?1:0);
+            spans.push({start:off, end:endOff, cls:"display_math"});
+          }
+        } else if (rest.slice(0,-2).trim()){
+          spans.push({start:off, end:off+ln.length, cls:"display_math"});
+        }
+      } else if (s.startsWith("\\[") && s.endsWith("\\]") && s.length > 3){
+        spans.push({start:off, end:off+ln.length, cls:"display_math"});
+      }
+      for (const re of [INLINE_DOLLAR_RE, INLINE_PAREN_RE]){
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(ln)) !== null){
+          spans.push({start:off+m.index, end:off+m.index+m[0].length, cls:"inline_math"});
+        }
+      }
+    }
+    off += ln.length + 1;
+  }
+
+  /* current-line band */
+  const caret = editor.selectionStart;
+  const curLineStart = text.lastIndexOf("\n", caret - 1) + 1;
+  let curLineEnd = text.indexOf("\n", caret);
+  if (curLineEnd === -1) curLineEnd = text.length;
+  spans.push({start:curLineStart, end:curLineEnd, cls:"curline"});
+
+  spans.sort((a,b) => a.start - b.start || (a.cls==="curline" ? -1 : 1));
+  let html = "", pos = 0;
+  for (const sp of spans){
+    if (sp.start < pos) continue;
+    html += esc(text.slice(pos, sp.start));
+    html += `<span class="${sp.cls}">` + esc(text.slice(sp.start, sp.end)) + "</span>";
+    pos = sp.end;
+  }
+  html += esc(text.slice(pos));
+  highlight.innerHTML = html;
+
+  /* gutter */
+  gutter.textContent = lines.map((_, i) => i + 1).join("\n");
+
+  /* counters + status */
+  const d = countDisplay(text);
+  $("counter").textContent = `${d} display equation${d !== 1 ? "s" : ""} detected`;
+  $("statusRight").textContent = `${d} display · ${countInline(lines, fence)} inline`;
+
+  const upTo = text.slice(0, caret);
+  const row = (upTo.match(/\n/g) || []).length + 1;
+  const col = caret - (upTo.lastIndexOf("\n") + 1) + 1;
+  const words = (text.trim().match(/\S+/g) || []).length;
+  $("statusLeft").innerHTML =
+    `untitled &nbsp;·&nbsp; Ln ${row}, Col ${col} &nbsp;·&nbsp; ${words} words, ${text.trim().length} chars`;
+
+  saveDraft();
+}
+
+function syncScroll(){
+  highlight.style.transform =
+    `translate(${-editor.scrollLeft}px, ${-editor.scrollTop}px)`;
+  gutter.scrollTop = editor.scrollTop;
+}
+
+/* ── toolbar actions (mirror gui/app.py) ─────── */
+function insertTemplateByName(name){
+  const tpl = TEMPLATES[name];
+  if (!tpl) return;
+  const p = editor.selectionStart;
+  editor.value = editor.value.slice(0,p) + "\n" + tpl + "\n" + editor.value.slice(p);
+  editor.focus();
+  render();
+}
+function insertTemplate(){
+  const name = $("tpl").value;
+  if (name) insertTemplateByName(name);
+  $("tpl").value = "";
+}
+function clearEditor(){ editor.value = ""; render(); }
+function pasteText(){
+  navigator.clipboard.readText().then(t => {
+    const p = editor.selectionStart;
+    editor.value = editor.value.slice(0,p) + t + editor.value.slice(p);
+    render();
+  }).catch(() => logLine("Clipboard access denied by browser — use Ctrl+V in the editor."));
+}
+function openFile(){ $("fileInput").click(); }
+$("fileInput").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  f.text().then(t => {
+    editor.value = t;
+    $("output").value = f.name.replace(/\.(md|tex|txt)$/, "") + ".docx";
+    render();
+    logLine(`Loaded: ${f.name}`);
+  });
+});
+function browseOutput(){
+  const n = prompt("Save Word Document (name only — UI preview):", $("output").value || "output.docx");
+  if (n) $("output").value = n;
+}
+function toggleFmt(){ $("eqFmt").disabled = !$("autonumber").checked; }
+function aboutDlg(){
+  alert("LaTeX → Word Converter\nVersion 1.1\n\nMarkdown/LaTeX → Word with native OMML equations,\nautomatic numbering, and Word VBA automation.\n\nMath detection: Pandoc dollar-math rules\n(currency, $ escapes and code fences are safe).");
+}
+
+/* ── find & replace ────────────────────────── */
+function toggleFind(show){
+  const bar = $("findbar");
+  const on = show === undefined ? !bar.classList.contains("on") : show;
+  bar.classList.toggle("on", on);
+  if (on){
+    const sel = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+    if (sel && !sel.includes("\n")) $("findText").value = sel;
+    $("findText").focus();
+    $("findText").select();
+  } else {
+    $("findStatus").textContent = "";
+    editor.focus();
+  }
+}
+function findNext(backwards){
+  const needle = $("findText").value;
+  if (!needle) return;
+  const hay = editor.value.toLowerCase(), n = needle.toLowerCase();
+  let pos;
+  if (backwards){
+    pos = hay.lastIndexOf(n, Math.max(0, editor.selectionStart - 1));
+    if (pos === -1) pos = hay.lastIndexOf(n);
+  } else {
+    pos = hay.indexOf(n, editor.selectionEnd);
+    if (pos === -1) pos = hay.indexOf(n);
+  }
+  if (pos === -1){ $("findStatus").textContent = "no matches"; return; }
+  editor.setSelectionRange(pos, pos + needle.length);
+  $("findStatus").textContent = "match found";
+  render();
+}
+function replaceCurrent(){
+  const needle = $("findText").value;
+  if (!needle) return;
+  const sel = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+  if (sel.toLowerCase() === needle.toLowerCase() && sel){
+    const p = editor.selectionStart;
+    editor.value = editor.value.slice(0,p) + $("replText").value + editor.value.slice(editor.selectionEnd);
+    render();
+  }
+  findNext();
+}
+function replaceAll(){
+  const needle = $("findText").value;
+  if (!needle) return;
+  const re = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  const n = (editor.value.match(re) || []).length;
+  editor.value = editor.value.replace(re, $("replText").value);
+  render();
+  $("findStatus").textContent = `replaced ${n} occurrence${n !== 1 ? "s" : ""}`;
+}
+
+/* ── log (same message shapes as _poll_queue) ── */
+function logLine(msg){
+  const log = $("log");
+  log.textContent += msg + "\n";
+  log.scrollTop = log.scrollHeight;
+}
+
+/* ── simulated conversion ────────────────────── */
+function convert(){
+  const content = editor.value.trim();
+  if (!content){ alert("Empty Input\n\nPlease enter or open some LaTeX/Markdown content."); return; }
+  if (!$("output").value.trim()){
+    const n = prompt("Save Word Document (name only — UI preview):", "output.docx");
+    if (!n) return;
+    $("output").value = n;
+  }
+  if (!$("output").value.toLowerCase().endsWith(".docx"))
+    $("output").value += ".docx";
+
+  $("convertBtn").disabled = true;
+  $("progress").classList.add("on");
+  $("post").classList.remove("on");
+  logLine("Converting…");
+
+  setTimeout(() => {
+    $("progress").classList.remove("on");
+    $("convertBtn").disabled = false;
+    const lines = content.split("\n"), fence = fenceSet(lines);
+    const d = countDisplay(content), i = countInline(lines, fence);
+    logLine(`✅ Success! ${d+i}/${d+i} equations converted. Saved to: ${$("output").value}`);
+    logLine("   (UI preview — conversion is simulated; no .docx written in the browser)");
+    $("post").classList.add("on");
+    if ($("autopen").checked)
+      logLine("Auto-open skipped in the UI preview.");
+  }, 1400);
+}
+
+/* ── settings persistence (localStorage ≙ ~/.latex-to-word-converter.json) */
+function saveDraft(){
+  try{
+    localStorage.setItem("lwx-draft", editor.value);
+    localStorage.setItem("lwx-opts", JSON.stringify({
+      autonumber: $("autonumber").checked,
+      eqFormat: $("eqFmt").value,
+      autopen: $("autopen").checked,
+      output: $("output").value,
+    }));
+  }catch(e){}
+}
+function restoreDraft(){
+  try{
+    const draft = localStorage.getItem("lwx-draft");
+    if (draft) editor.value = draft;
+    const opts = JSON.parse(localStorage.getItem("lwx-opts") || "{}");
+    if (typeof opts.autonumber === "boolean") $("autonumber").checked = opts.autonumber;
+    if (opts.eqFormat) $("eqFmt").value = opts.eqFormat;
+    if (typeof opts.autopen === "boolean") $("autopen").checked = opts.autopen;
+    if (opts.output) $("output").value = opts.output;
+  }catch(e){}
+}
+
+/* ── events ─────────────────────────────────── */
+editor.addEventListener("input", render);
+editor.addEventListener("click", render);
+editor.addEventListener("keyup", render);
+editor.addEventListener("scroll", syncScroll);
+["eqFmt","output"].forEach(id => $(id).addEventListener("input", saveDraft));
+
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey && e.key === "f"){ e.preventDefault(); toggleFind(true); }
+  else if (e.key === "F3"){ e.preventDefault(); findNext(e.shiftKey); }
+  else if (e.ctrlKey && e.key === "Enter"){ e.preventDefault(); convert(); }
+  else if (e.ctrlKey && e.key.toLowerCase() === "o"){ e.preventDefault(); openFile(); }
+  else if (e.ctrlKey && e.key.toLowerCase() === "s"){ e.preventDefault(); browseOutput(); }
+  else if (e.key === "Escape"){ toggleFind(false); }
+});
+$("findText").addEventListener("keydown", e => {
+  if (e.key === "Enter"){ e.preventDefault(); findNext(); }
+  if (e.key === "Escape") toggleFind(false);
+});
+$("replText").addEventListener("keydown", e => {
+  if (e.key === "Enter"){ e.preventDefault(); replaceCurrent(); }
+  if (e.key === "Escape") toggleFind(false);
+});
+
+/* boot — same welcome lines as the app */
+logLine("Ready. Paste or open a LaTeX/Markdown file to begin.");
+logLine("OMML stylesheet loaded: core/MML2OMML.XSL");
+restoreDraft();
+if (!editor.value){
+  editor.value = [
+    "# Sample Document",
+    "",
+    "Let $\\alpha, \\beta \\in \\mathbb{R}$ and $E = mc^2$.",
+    "",
+    "$$",
+    "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+    "$$",
+    "",
+    "Price stays prose: $5.00 and $10.00.",
+    "",
+    "```",
+    "$$not math inside fences$$",
+    "```",
+    "",
+    "| Col | Formula |",
+    "|---|---|",
+    "| abs | $|x|$ |",
+  ].join("\n");
+}
+render();
+syncScroll();
+</script>
+</body>
+</html>

@@ -32,11 +32,20 @@ Most Markdown-to-Word tools (like default Pandoc setups) rasterize LaTeX equatio
 - **Native OMML Generation**: Translates inline (`$...$`) and display (`$$...$$`) math into genuine `<m:oMath>` and `<m:oMathPara>` XML elements inside the OpenXML document tree.
 - **Auto-Numbered Equations**: Automatic equation numbering using an invisible 3-column table layout (left margin, centered equation, right-aligned numbering tag such as `(1)`).
 - **Modern Desktop GUI**:
-  - Dark-themed code editor with real-time LaTeX syntax highlighting.
-  - Live equation counter showing detected formulas as you type.
-  - Template dropdown for quick insertion of fractions, summations, integrals, and matrices.
-  - Non-blocking asynchronous conversion with progress indicators.
-  - 1-click **Open File** and **Open Folder** actions upon completion.
+  - Dark-themed code editor with line numbers, current-line highlight, and
+    real-time LaTeX syntax highlighting driven by the shared math tokenizer.
+  - Menu bar with keyboard shortcuts: `Ctrl+O` open, `Ctrl+S` save output,
+    `Ctrl+F` find & replace (with match count), `F3`/`Shift+F3` find next/prev,
+    `Ctrl+Return` convert.
+  - Live equation counter and status bar (caret position, word count,
+    display/inline equation counts).
+  - Template dropdown / Insert menu for quick insertion of fractions,
+    summations, integrals, and matrices.
+  - Options persisted to `~/.latex-to-word-converter.json` (window geometry,
+    numbering format, output folder), plus optional auto-open after conversion.
+  - Non-blocking asynchronous conversion with progress indicator, a status log
+    listing any failed formulas by line number, and 1-click **Open File** /
+    **Open Folder** actions upon completion.
 - **CLI & Python API**: Effortless headless execution for batch jobs or automated CI/CD documentation pipelines.
 - **Word VBA Automation Suite**: Bundled `.bas` macro module for dynamic in-Word equation renumbering and cross-reference generation (`Eq. (n)`).
 - **Academic Typography**: Enforces standard academic formatting (1-inch margins, Times New Roman 12pt body, 1.15 line spacing, 6pt spacing after paragraphs).
@@ -127,8 +136,13 @@ print(f"Converted {stats['equations_converted']} equations successfully!")
 
 The desktop application (`gui/app.py`) provides an intuitive authoring and conversion environment:
 
-- **Editor**: Multi-line editor styled in Catppuccin Mocha colors with gold/green syntax highlighting for mathematical blocks.
-- **Template Library**: One-click insertion of common mathematical constructs:
+- **Editor**: Multi-line editor styled in Catppuccin Mocha colors with gold/green syntax
+  highlighting for mathematical blocks, a line-number gutter, current-line highlight,
+  scrollbars, undo/redo, and find & replace.
+- **Menus & shortcuts**: File (`Ctrl+O`, `Ctrl+S`), Edit (find/replace, undo/redo),
+  Insert (templates), Help (About). Convert with `Ctrl+Return`.
+- **Template Library** (toolbar dropdown or Insert menu): one-click insertion of common
+  mathematical constructs:
   - Fractions: `$$\frac{a}{b}$$`
   - Summations: `$$\sum_{i=1}^{n} x_i$$`
   - Definite Integrals: `$$\int_{a}^{b} f(x)\, dx$$`
