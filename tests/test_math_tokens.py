@@ -8,6 +8,9 @@ from core.math_tokens import (
     is_fence_line,
     fence_marker,
     INLINE_DOLLAR_RE,
+    find_bare_math,
+    find_bare_math_in_line,
+    normalize_bare_math,
 )
 
 
@@ -115,3 +118,79 @@ class TestPublicRegexes:
         assert math_values(split_inline_math(line)) == ["x+1"]
         spans = [m.group(0) for m in INLINE_DOLLAR_RE.finditer(line)]
         assert spans == ["$x+1$"]
+
+
+class TestBareMath:
+    """Formulas typed WITHOUT $ or \\( delimiters must still be recognized."""
+
+    USER_EXAMPLE = (
+        "f_1 in {0.05, 0.15, 0.35}; f_2 in {0.10, 0.25, 0.50}, "
+        "E_2[ N_hat * theta_hat_DML | s_1 ] = sum_{k in s_1} w_1k Y_k "
+        "+ o_p(N n^(-1/2))."
+    )
+
+    def test_user_example_detected(self):
+        toks = split_inline_math(self.USER_EXAMPLE)
+        bare = [t.value for t in toks if t.kind == "bare_math"]
+        assert len(bare) == 3
+        assert bare[0] == "f_1 in {0.05, 0.15, 0.35}"
+        assert bare[1] == "f_2 in {0.10, 0.25, 0.50}"
+        assert bare[2].startswith("E_2[ N_hat * theta_hat_DML")
+        assert bare[2].endswith("o_p(N n^(-1/2))")
+
+    def test_prose_identifiers_stay_prose(self):
+        toks = split_inline_math(
+            "the max_size of a snake_case_name is not math")
+        assert math_values(toks) == []
+        assert not any(t.kind == "bare_math" for t in toks)
+
+    def test_comparisons_detected(self):
+        toks = split_inline_math("rate_2 <= t_1 and speed >= 3.")
+        bare = [t.value for t in toks if t.kind == "bare_math"]
+        assert bare == ["rate_2 <= t_1", "speed >= 3"]
+
+    def test_bare_formula_inside_prose(self):
+        toks = split_inline_math("Let f_1 be the rate; it is small.")
+        assert [t.value for t in toks if t.kind == "bare_math"] == ["f_1"]
+
+    def test_code_and_delimited_win(self):
+        toks = split_inline_math("with $x^2$ and `sum_1` plus sum_1 code")
+        kinds = [(t.kind, t.value) for t in toks]
+        assert ("math", "x^2") in kinds
+        assert ("bare_math", "sum_1") in kinds  # trailing prose trimmed
+        assert any(k == "code" for k, _ in kinds)
+
+    def test_find_bare_math_in_line_offsets(self):
+        line = "see f_1 and $x$ here"
+        spans = find_bare_math_in_line(line)
+        assert len(spans) == 1
+        s, e = spans[0]
+        assert line[s:e] == "f_1"
+
+
+class TestNormalizeBareMath:
+    def test_user_example_normalization(self):
+        norm = normalize_bare_math(
+            "E_2[ N_hat * theta_hat_DML | s_1 ] = sum_{k in s_1} "
+            "w_1k Y_k + o_p(N n^(-1/2))")
+        assert r"\hat{N}" in norm
+        assert r"\hat{\theta}_{DML}" in norm
+        assert r"\cdot" in norm
+        assert r"\mid" in norm
+        assert r"\sum_{k \in s_{1}}" in norm
+        assert r"w_{1k}" in norm
+        assert r"n^{-1/2}" in norm
+        # subscript braces must NOT be escaped as set braces
+        assert r"\sum_\{" not in norm
+
+    def test_set_braces_escaped(self):
+        norm = normalize_bare_math("f_1 in {0.05, 0.15, 0.35}")
+        assert r"f_{1}" in norm
+        assert r"\in" in norm
+        assert r"\{0.05, 0.15, 0.35\}" in norm
+
+    def test_comparisons_and_greek(self):
+        assert r"\leq" in normalize_bare_math("rate_2 <= t_1")
+        assert r"\geq" in normalize_bare_math("speed >= 3")
+        norm = normalize_bare_math("alpha_1 + beta_2")
+        assert r"\alpha" in norm and r"\beta" in norm

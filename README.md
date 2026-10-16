@@ -30,6 +30,7 @@ Most Markdown-to-Word tools (like default Pandoc setups) rasterize LaTeX equatio
 ## ✨ Key Features
 
 - **Native OMML Generation**: Translates inline (`$...$`) and display (`$$...$$`) math into genuine `<m:oMath>` and `<m:oMathPara>` XML elements inside the OpenXML document tree.
+- **Bare Formula Detection**: Recognizes formulas typed **without delimiters** — `f_1 in {0.05, 0.15}`, `E_2[ N_hat * theta_hat_DML | s_1 ] = sum_{k in s_1} w_1k Y_k` — and normalizes informal ASCII math before conversion (`N_hat` → N̂, `sum_` → Σ, `<=` → ≤, `w_1k` → w₁ₖ, `{…}` → set braces). Conservative heuristics keep prose identifiers (`max_size`, `snake_case_name`) untouched, and code fences/spans are never scanned.
 - **Auto-Numbered Equations**: Automatic equation numbering using an invisible 3-column table layout (left margin, centered equation, right-aligned numbering tag such as `(1)`).
 - **Modern Desktop GUI**:
   - Dark-themed code editor with line numbers, current-line highlight, and

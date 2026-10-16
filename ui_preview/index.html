@@ -103,6 +103,7 @@
   }
   #highlight .inline_math{color:var(--math-fg);}
   #highlight .display_math{color:var(--display-fg);}
+  #highlight .bare_math{color:#fab387; text-decoration:underline;}
   #highlight .code_block{color:var(--code-fg); background:var(--code-bg);}
   #highlight .curline{background:var(--line-hl);}
   #editor{
@@ -159,10 +160,10 @@
 <body>
 <div class="banner">
   ⚠ <strong>UI preview</strong> — faithful, interactive replica of the enhanced Tkinter app
-  (<code>gui/app.py</code>): menus, find/replace, line numbers, status bar, and settings
-  persistence (draft saved in localStorage). Highlighting and counts use the app’s real
-  tokenizer rules. <strong>Conversion is simulated</strong>; the real app runs via
-  <code>python main.py</code> on a desktop.
+  (<code>gui/app.py</code>): menus, find/replace, line numbers, status bar, bare-formula
+  detection (peach, underlined), and settings persistence (draft saved in localStorage).
+  Highlighting and counts use the app’s real tokenizer rules. <strong>Conversion is
+  simulated</strong>; the real app runs via <code>python main.py</code> on a desktop.
 </div>
 
 <div class="window" id="win">
@@ -292,6 +293,83 @@
 const INLINE_DOLLAR_RE = /(?<![\\$])\$(?!\$)(?!\s)([^$\n]+?)(?<!\s)\$(?![0-9])/g;
 const INLINE_PAREN_RE  = /\\\(([^$\n]+?)\\\)/g;
 
+/* bare (un-delimited) math: strong-signal seeds + bracket-aware expansion */
+const BARE_SEED_RE = /_\{|_[0-9(]|\^\{|\^[0-9(]|(?:\b(?:sum|prod|int|lim|inf|sup|det|max|min|log|exp|ln)_(?:\{|[0-9]|[A-Za-z](?![A-Za-z0-9])))|\w+_(?:hat|bar|tilde|dot|ddot|star|prime)(?![A-Za-z])|<=|>=|!=|->/g;
+const BARE_STOP = new Set(`a an the and or but nor so yet as at by to for with from on about into over after before between out up down not no yes can will just also than too very here there such each both all any some more most other only own same is are was were be been being am it its this that these those then thus hence so which who whom whose where when while why how if else do does did done have has had let we you they he she i our your their of off example examples etc vs versus per among during without within upon above below under again further once twice because since until unless therefore whereas respectively given suppose assume note recall define defined defines means denote denotes denoting get got make makes made use used using value values variable variables function functions equation equations formula formulas term terms set sets word words left right where plus minus equals equal divided multiply times result results code text data input output see show shows shown give gives yield yields follow follows produce produces`.split(/\s+/));
+
+function findBareSpans(text){
+  const out = [];
+  for (const m of text.matchAll(BARE_SEED_RE)){
+    let s = m.index, e = m.index + m[0].length;
+    if (out.some(([ts,te]) => s >= ts && e <= te)) continue;
+    /* expand left */
+    let depth = 0, i = s;
+    while (i > 0){
+      const ch = text[i-1];
+      if (ch === "]" || ch === ")" || ch === "}") depth++;
+      else if (ch === "[" || ch === "(" || ch === "{"){
+        if (depth === 0) break;
+        depth--;
+      } else if (ch === "\n") break;
+      if (depth === 0){
+        if (ch === ";" || ch === ",") break;
+        if (ch === "$") break;
+        if (ch === "." && (i-1 === 0 || text[i-2] === " ") && (i >= text.length || text[i] === " " || text[i] === ")" )) break;
+      }
+      if (ch === " " && depth === 0){
+        let j = i-1; while (j > 0 && /[A-Za-z_]/.test(text[j-1])) j--;
+        const w = text.slice(j, i-1).toLowerCase();
+        if (w && BARE_STOP.has(w)) break;
+      }
+      i--;
+    }
+    s = i;
+    /* expand right */
+    depth = 0; let j = e;
+    while (j < text.length){
+      const ch = text[j];
+      if (ch === "[" || ch === "(" || ch === "{") depth++;
+      else if (ch === "]" || ch === ")" || ch === "}"){
+        if (depth === 0) break;
+        depth--;
+      } else if (ch === "\n") break;
+      if (depth === 0){
+        if (ch === ";" || ch === ",") break;
+        if (ch === "$") break;
+        if (ch === "." && (j+1 >= text.length || text[j+1] === " ")) break;
+      }
+      if (ch === " " && depth === 0){
+        let k = j+1; while (k < text.length && /[A-Za-z_]/.test(text[k])) k++;
+        const w = text.slice(j+1, k).toLowerCase();
+        if (w && BARE_STOP.has(w)) break;
+      }
+      j++;
+    }
+    e = j;
+    let span = text.slice(s, e).trim().replace(/^[\s.,;:]+|[\s.,;:]+$/g, "");
+    for (const wd of ["in","and","or","for","with","of","to","on","at","by","is","are","as","but"]){
+      if (span.toLowerCase().endsWith(" " + wd)) span = span.slice(0, -(wd.length+1)).trimEnd();
+      if (span.toLowerCase().startsWith(wd + " ")) span = span.slice(wd.length+1).trimStart();
+    }
+    /* trim trailing prose nouns (sum_1 code → sum_1) */
+    while (true){
+      const m2 = span.match(/([A-Za-z][A-Za-z0-9]*)\s*$/);
+      if (!m2) break;
+      const word = m2[1], rest = span.slice(0, m2.index).trimEnd();
+      const wm = span.slice(m2.index).trim().match(/^([A-Za-z][A-Za-z0-9]*)(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?$/);
+      const hasSub = wm && wm[0] !== word;
+      if (word.length === 1 || hasSub || !rest) break;
+      span = rest;
+    }
+    if (!span || !BARE_SEED_RE.test(span)) continue;
+    BARE_SEED_RE.lastIndex = 0;
+    const rel = text.slice(s, e).indexOf(span);
+    if (rel === -1) continue;
+    out.push([s + rel, s + rel + span.length]);
+  }
+  return out.sort((a,b) => a[0]-b[0]);
+}
+
 const TEMPLATES = {
   "Fraction": "$$\\frac{a}{b}$$",
   "Summation": "$$\\sum_{i=1}^{n} x_i$$",
@@ -369,6 +447,7 @@ function countInline(lines, fence){
       re.lastIndex = 0;
       for (const _ of lines[i].matchAll(re)) n++;
     }
+    n += findBareSpans(lines[i]).length;
   }
   return n;
 }
@@ -409,6 +488,10 @@ function render(){
         while ((m = re.exec(ln)) !== null){
           spans.push({start:off+m.index, end:off+m.index+m[0].length, cls:"inline_math"});
         }
+      }
+      /* bare un-delimited formulas (peach/underlined) */
+      for (const [bs, be] of findBareSpans(ln)){
+        spans.push({start:off+bs, end:off+be, cls:"bare_math"});
       }
     }
     off += ln.length + 1;
@@ -650,7 +733,11 @@ if (!editor.value){
     "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
     "$$",
     "",
-    "Price stays prose: $5.00 and $10.00.",
+    "Bare formulas (no delimiters) are recognized too:",
+    "f_1 in {0.05, 0.15, 0.35}; f_2 in {0.10, 0.25, 0.50},",
+    "E_2[ N_hat * theta_hat_DML | s_1 ] = sum_{k in s_1} w_1k Y_k + o_p(N n^(-1/2)).",
+    "",
+    "Price stays prose: $5.00 and $10.00 — and so does max_size.",
     "",
     "```",
     "$$not math inside fences$$",

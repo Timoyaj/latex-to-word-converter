@@ -42,7 +42,7 @@ if _PROJECT_ROOT not in sys.path:
 from core.converter import LatexToWordConverter
 from core.math_tokens import (
     count_display_math, split_inline_math, is_fence_line, fence_marker,
-    INLINE_DOLLAR_RE, INLINE_PAREN_RE,
+    INLINE_DOLLAR_RE, INLINE_PAREN_RE, find_bare_math_in_line,
 )
 
 APP_NAME = "LaTeX → Word Converter"
@@ -292,6 +292,8 @@ class ConverterApp:
         # syntax-highlight + decoration tags
         self.editor.tag_configure("inline_math",  foreground=_MATH_FG)
         self.editor.tag_configure("display_math", foreground=_DISPLAY_FG)
+        self.editor.tag_configure("bare_math", foreground="#fab387",
+                                  underline=True)
         self.editor.tag_configure("code_block", foreground="#9399b2",
                                   background="#181825")
         self.editor.tag_configure("current_line", background=_LINE_HL)
@@ -720,6 +722,9 @@ class ConverterApp:
                 tag_range("inline_math", pos + m.start(), pos + m.end())
             for m in INLINE_PAREN_RE.finditer(ln):
                 tag_range("inline_math", pos + m.start(), pos + m.end())
+            # bare (un-delimited) formulas — underlined peach
+            for s, e in find_bare_math_in_line(ln):
+                tag_range("bare_math", pos + s, pos + e)
 
         # ── current-line highlight (under the other tags) ─────────
         try:
@@ -746,7 +751,8 @@ class ConverterApp:
         for idx, ln in enumerate(lines):
             if idx in fence_line_idx:
                 continue
-            inline += sum(1 for t in split_inline_math(ln) if t.kind == "math")
+            inline += sum(1 for t in split_inline_math(ln)
+                          if t.kind in ("math", "bare_math"))
         self._math_stat_var.set(f"{count} display · {inline} inline")
 
         words = len(re.findall(r"\S+", text.rstrip("\n")))

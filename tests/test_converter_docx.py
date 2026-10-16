@@ -30,6 +30,7 @@ def convert(converter, name: str, out_docx, **kwargs):
         ("markdown_mix.md", "markdown_mix.json"),
         ("edge_cases.md", "edge_cases.json"),
         ("failures.md", "failures.json"),
+        ("bare_math.md", "bare_math.json"),
     ],
 )
 def test_fixture_structure(converter, out_docx, fixture, expected_file):
@@ -157,6 +158,38 @@ def test_failed_formulas_reported_with_lines(converter, out_docx):
     # fallback text is present in the document
     xml = docx_xml(out_docx)
     assert "notacommand" in xml
+
+
+# ── bare formula detection ────────────────────────────────────────────────
+
+def test_bare_formulas_become_omml(converter, out_docx):
+    stats = convert(converter, "bare_math.md", out_docx)
+    assert stats["equations_failed"] == 0
+    assert stats["equations_total"] == 7  # 5 bare + $x$ + \( y \)
+    xml = docx_xml(out_docx)
+    assert omath_count(xml) == 7
+    # normalized structures, not raw ASCII: \hat{…} → m:acc accent elements
+    assert "m:acc" in xml
+    # prose identifiers untouched
+    assert "max_size" in xml
+    assert "snake_case_name" in xml
+    # the raw user formula text is gone (converted)
+    assert "N_hat * theta_hat_DML" not in xml
+
+
+def test_bare_normalization_hat_and_sum(converter):
+    from core.math_tokens import normalize_bare_math
+    omml = converter.latex_to_omml(
+        normalize_bare_math(
+            "E_2[ N_hat * theta_hat_DML | s_1 ] = sum_{k in s_1} "
+            "w_1k Y_k + o_p(N n^(-1/2))"),
+        is_display=False)
+    assert omml is not None
+    from lxml import etree
+    xml = etree.tostring(omml, encoding="unicode")
+    assert "oMath" in xml
+    assert "m:sSub" in xml       # subscripts
+    assert "m:acc" in xml or "hat" in xml  # accents
 
 
 # ── golden OMML fragment ──────────────────────────────────────────────────

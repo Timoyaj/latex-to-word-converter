@@ -25,6 +25,7 @@ from latex2mathml.converter import convert as latex2mathml_convert
 
 from core.math_tokens import (
     split_inline_math, split_table_row, is_fence_line, fence_marker,
+    normalize_bare_math,
 )
 
 
@@ -336,12 +337,20 @@ class LatexToWordConverter:
     def _emit_inline_tokens(self, paragraph, text: str):
         """Append text/math/code runs to *paragraph* via the shared tokenizer."""
         for token in split_inline_math(text):
-            if token.kind == "math":
+            if token.kind in ("math", "bare_math"):
+                is_bare = token.kind == "bare_math"
+                latex = (normalize_bare_math(token.value) if is_bare
+                         else token.value)
                 self._stats["equations_total"] += 1
-                omml = self.latex_to_omml(token.value, is_display=False)
+                omml = self.latex_to_omml(latex, is_display=False)
                 if omml is not None:
                     paragraph._p.append(omml)
                     self._stats["equations_converted"] += 1
+                elif is_bare:
+                    # false-positive safety: restore the original prose as-is
+                    paragraph.add_run(token.value)
+                    self._stats["equations_failed"] += 1
+                    self._record_failure(token.value)
                 else:
                     run = paragraph.add_run(token.value)
                     run.italic = True
@@ -490,12 +499,21 @@ class LatexToWordConverter:
                 cell_p.paragraph_format.space_before = Pt(2)
 
                 for token in split_inline_math(val):
-                    if token.kind == "math":
+                    if token.kind in ("math", "bare_math"):
+                        is_bare = token.kind == "bare_math"
+                        latex = (normalize_bare_math(token.value) if is_bare
+                                 else token.value)
                         self._stats["equations_total"] += 1
-                        omml = self.latex_to_omml(token.value, is_display=False)
+                        omml = self.latex_to_omml(latex, is_display=False)
                         if omml is not None:
                             cell_p._p.append(omml)
                             self._stats["equations_converted"] += 1
+                        elif is_bare:
+                            r = cell_p.add_run(token.value)
+                            if r_idx == 0:
+                                r.font.bold = True
+                            self._stats["equations_failed"] += 1
+                            self._record_failure(token.value)
                         else:
                             r = cell_p.add_run(token.value)
                             r.italic = True
