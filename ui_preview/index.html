@@ -155,6 +155,36 @@
     display:flex; justify-content:space-between; padding:2px 6px;
     font-size:9px; color:var(--muted);
   }
+
+  /* ── split pane: editor | live preview ────── */
+  .split{ display:flex; gap:6px; flex:1; min-height:0; }
+  .split .frame{ flex:1; min-width:0; display:flex; flex-direction:column; }
+  .preview{
+    flex:1; overflow:auto; background:#fff; color:#1e293b;
+    font-family:Georgia,"Times New Roman",serif; font-size:11px;
+    padding:8px 12px; border-radius:4px; line-height:1.55; cursor:default;
+  }
+  .preview .pv-h1{ font-size:16px; font-weight:700; margin:10px 0 4px; }
+  .preview .pv-h2{ font-size:14px; font-weight:700; margin:8px 0 3px; }
+  .preview .pv-h3{ font-size:12px; font-weight:700; font-style:italic; margin:6px 0 2px; }
+  .preview .pv-h4{ font-size:11px; font-weight:700; margin:6px 0 2px; }
+  .preview .pv-math{ color:#1d4ed8; }
+  .preview .pv-bare{ color:#c2410c; text-decoration:underline dotted; }
+  .preview .pv-display{
+    color:#1d4ed8; text-align:center; font-size:12.5px;
+    margin:10px 0 2px; white-space:pre-wrap;
+  }
+  .preview .pv-label{ display:block; text-align:right; color:#94a3b8; font-size:10px; }
+  .preview .pv-code{
+    font-family:Consolas,monospace; font-size:9.5px; background:#f1f5f9;
+    color:#475569; padding:1px 4px; border-radius:3px; white-space:pre-wrap;
+  }
+  .preview .pv-quote{ font-style:italic; color:#475569; margin-left:16px; }
+  .preview .pv-table{ color:#334155; font-size:10.5px; white-space:pre-wrap; }
+  .preview .pv-p{ margin:2px 0 10px; }
+  .preview .pv-src{ cursor:pointer; border-radius:2px; }
+  .preview .pv-src:hover{ background:#eef2ff; }
+  .preview .pv-block{ scroll-margin:12px; }
 </style>
 </head>
 <body>
@@ -238,14 +268,20 @@
   </div>
 
   <!-- ── editor ─────────────────────────────── -->
-  <div class="frame" style="flex:1; min-height:0;">
-    <div class="cap">LaTeX / Markdown Input</div>
-    <div class="editor-row">
-      <div id="gutter">1</div>
-      <div class="code-wrap">
-        <pre id="highlight"></pre>
-        <textarea id="editor" spellcheck="false"></textarea>
+  <div class="split">
+    <div class="frame" style="flex:1; min-height:0;">
+      <div class="cap">LaTeX / Markdown Input</div>
+      <div class="editor-row">
+        <div id="gutter">1</div>
+        <div class="code-wrap">
+          <pre id="highlight"></pre>
+          <textarea id="editor" spellcheck="false"></textarea>
+        </div>
       </div>
+    </div>
+    <div class="frame" style="flex:1; min-height:0;">
+      <div class="cap">Live Preview — click a formula to jump to source (F5 refresh)</div>
+      <div class="preview" id="preview"></div>
     </div>
   </div>
 
@@ -267,7 +303,8 @@
 
   <!-- ── actions ────────────────────────────── -->
   <div class="actions">
-    <button class="convert" id="convertBtn" onclick="convert()">⚡&nbsp; Convert to Word&nbsp;&nbsp;(Ctrl+Return)</button>
+    <button class="convert" id="convertBtn" onclick="convert()">⚡&nbsp; Convert &amp; Save&nbsp;&nbsp;(Ctrl+Return)</button>
+    <button onclick="wrapFormula()">📐 Wrap formula</button>
     <div class="progress" id="progress"><div class="bar"></div></div>
     <div class="post" id="post">
       <button onclick="logLine('Open File is unavailable in the UI preview (browser sandbox).')">📄 Open File</button>
@@ -294,30 +331,74 @@ const INLINE_DOLLAR_RE = /(?<![\\$])\$(?!\$)(?!\s)([^$\n]+?)(?<!\s)\$(?![0-9])/g
 const INLINE_PAREN_RE  = /\\\(([^$\n]+?)\\\)/g;
 
 /* bare (un-delimited) math: strong-signal seeds + bracket-aware expansion */
-const BARE_SEED_RE = /_\{|_[0-9(]|\^\{|\^[0-9(]|(?:\b(?:sum|prod|int|lim|inf|sup|det|max|min|log|exp|ln)_(?:\{|[0-9]|[A-Za-z](?![A-Za-z0-9])))|\w+_(?:hat|bar|tilde|dot|ddot|star|prime)(?![A-Za-z])|<=|>=|!=|->/g;
+const BARE_SEED_RE = /_\{|_[0-9(]|\^\{|\^[0-9(]|(?:\b(?:sum|prod|int|lim|inf|sup|det|max|min|log|exp|ln)_(?:\{|[0-9]|[A-Za-z](?![A-Za-z0-9])))|(?:\b(?:[A-Za-z]|alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega)_(?:\{|\d|[A-Za-z]{1,2}(?![A-Za-z0-9])))|\w+_(?:hat|bar|tilde|dot|ddot|star|prime)(?![A-Za-z])|<=|>=|!=|->/g;
 const BARE_STOP = new Set(`a an the and or but nor so yet as at by to for with from on about into over after before between out up down not no yes can will just also than too very here there such each both all any some more most other only own same is are was were be been being am it its this that these those then thus hence so which who whom whose where when while why how if else do does did done have has had let we you they he she i our your their of off example examples etc vs versus per among during without within upon above below under again further once twice because since until unless therefore whereas respectively given suppose assume note recall define defined defines means denote denotes denoting get got make makes made use used using value values variable variables function functions equation equations formula formulas term terms set sets word words left right where plus minus equals equal divided multiply times result results code text data input output see show shows shown give gives yield yields follow follows produce produces`.split(/\s+/));
+const BARE_GREEK = `alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi pi rho sigma tau upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega`.split(/\s+/);
+const BARE_ALLOWED = new Set(`in notin subset subseteq supset supseteq approx equiv neq to implies iff cdot times div sum prod int lim inf sup det max min log ln exp arg deg hat bar tilde dot dddot star prime`.split(/\s+/).concat(BARE_GREEK));
+const _EDGE_TOKEN_RE = /[A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?/;
+const _EDGE_KEEP_OPS = /<=|>=|!=|->|[=<>+*|]/;
+
+function _trimProseEdges(span){
+  function keep(tokStart, tokEnd, side){
+    const tok = span.slice(tokStart, tokEnd);
+    const m = tok.match(_EDGE_TOKEN_RE);
+    const base = m ? m[0].split("_")[0].split("^")[0] : tok;
+    const hasSub = !!m && m[0] !== base;
+    if (hasSub || BARE_ALLOWED.has(base) || base.length === 1) return true;
+    if (/^\d+$/.test(base)) return true;
+    if (side === "left"){
+      if (_EDGE_KEEP_OPS.test(span.slice(tokEnd, tokEnd+8).replace(/^\s+/, ""))) return true;
+    } else {
+      if (_EDGE_KEEP_OPS.test(span.slice(0, tokStart).slice(-6))) return true;
+    }
+    return false;
+  }
+  while (span){
+    let m = span.match(/^([A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?)\s+/);
+    if (m && !keep(0, m[1].length, "left")){ span = span.slice(m[0].length); continue; }
+    m = span.match(/\s+([A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?)$/);
+    if (m && !keep(m.index + 1, m.index + 1 + m[1].length, "right")){
+      span = span.slice(0, m.index).trimEnd();
+      continue;
+    }
+    return span;
+  }
+  return span;
+}
 
 function findBareSpans(text){
   const out = [];
+  const n = text.length;
   for (const m of text.matchAll(BARE_SEED_RE)){
     let s = m.index, e = m.index + m[0].length;
     if (out.some(([ts,te]) => s >= ts && e <= te)) continue;
+    /* seed may end with an opener ("_{") — keep its depth in the walk */
+    const seed = text.slice(s, e);
+    const openC = t => (t.match(/[[({]/g) || []).length;
+    const closeC = t => (t.match(/[\])}]/g) || []).length;
     /* expand left */
-    let depth = 0, i = s;
+    let depth = Math.max(0, closeC(seed) - openC(seed));
+    let i = s;
     while (i > 0){
       const ch = text[i-1];
       if (ch === "]" || ch === ")" || ch === "}") depth++;
       else if (ch === "[" || ch === "(" || ch === "{"){
         if (depth === 0) break;
         depth--;
-      } else if (ch === "\n") break;
+      }
       if (depth === 0){
         if (ch === ";" || ch === ",") break;
+        if (ch === "."){
+          /* sentence period = glued left + space right; stray " . " continues */
+          const glued = (i-1 > 0 && text[i-2] !== " " && text[i-2] !== "\t");
+          const followed = i < n ? text[i] : " ";
+          if (glued && (followed === " " || followed === "\t")) break;
+        }
         if (ch === "$") break;
-        if (ch === "." && (i-1 === 0 || text[i-2] === " ") && (i >= text.length || text[i] === " " || text[i] === ")" )) break;
       }
-      if (ch === " " && depth === 0){
-        let j = i-1; while (j > 0 && /[A-Za-z_]/.test(text[j-1])) j--;
+      if ((ch === " " || ch === "\n") && depth === 0){
+        let j = i-1;
+        while (j > 0 && /[A-Za-z_]/.test(text[j-1])) j--;
         const w = text.slice(j, i-1).toLowerCase();
         if (w && BARE_STOP.has(w)) break;
       }
@@ -325,21 +406,27 @@ function findBareSpans(text){
     }
     s = i;
     /* expand right */
-    depth = 0; let j = e;
-    while (j < text.length){
+    depth = Math.max(0, openC(text.slice(s, e)) - closeC(text.slice(s, e)));
+    let j = e;
+    while (j < n){
       const ch = text[j];
       if (ch === "[" || ch === "(" || ch === "{") depth++;
       else if (ch === "]" || ch === ")" || ch === "}"){
         if (depth === 0) break;
         depth--;
-      } else if (ch === "\n") break;
+      }
       if (depth === 0){
         if (ch === ";" || ch === ",") break;
+        if (ch === "."){
+          const glued = (j > 0 && text[j-1] !== " " && text[j-1] !== "\t");
+          const followed = j+1 < n ? text[j+1] : " ";
+          if (glued && (followed === " " || followed === "\t")) break;
+        }
         if (ch === "$") break;
-        if (ch === "." && (j+1 >= text.length || text[j+1] === " ")) break;
       }
-      if (ch === " " && depth === 0){
-        let k = j+1; while (k < text.length && /[A-Za-z_]/.test(text[k])) k++;
+      if ((ch === " " || ch === "\n") && depth === 0){
+        let k = j+1;
+        while (k < n && /[A-Za-z_]/.test(text[k])) k++;
         const w = text.slice(j+1, k).toLowerCase();
         if (w && BARE_STOP.has(w)) break;
       }
@@ -351,23 +438,22 @@ function findBareSpans(text){
       if (span.toLowerCase().endsWith(" " + wd)) span = span.slice(0, -(wd.length+1)).trimEnd();
       if (span.toLowerCase().startsWith(wd + " ")) span = span.slice(wd.length+1).trimStart();
     }
-    /* trim trailing prose nouns (sum_1 code → sum_1) */
-    while (true){
-      const m2 = span.match(/([A-Za-z][A-Za-z0-9]*)\s*$/);
-      if (!m2) break;
-      const word = m2[1], rest = span.slice(0, m2.index).trimEnd();
-      const wm = span.slice(m2.index).trim().match(/^([A-Za-z][A-Za-z0-9]*)(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?$/);
-      const hasSub = wm && wm[0] !== word;
-      if (word.length === 1 || hasSub || !rest) break;
-      span = rest;
-    }
+    span = _trimProseEdges(span);
     if (!span || !BARE_SEED_RE.test(span)) continue;
     BARE_SEED_RE.lastIndex = 0;
     const rel = text.slice(s, e).indexOf(span);
     if (rel === -1) continue;
     out.push([s + rel, s + rel + span.length]);
   }
-  return out.sort((a,b) => a[0]-b[0]);
+  out.sort((a,b) => a[0]-b[0]);
+  /* merge overlaps */
+  const merged = [];
+  for (const [s, e] of out){
+    if (merged.length && s < merged[merged.length-1][1])
+      merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], e);
+    else merged.push([s, e]);
+  }
+  return merged;
 }
 
 const TEMPLATES = {
@@ -531,12 +617,14 @@ function render(){
     `untitled &nbsp;·&nbsp; Ln ${row}, Col ${col} &nbsp;·&nbsp; ${words} words, ${text.trim().length} chars`;
 
   saveDraft();
+  schedulePreview();
 }
 
 function syncScroll(){
   highlight.style.transform =
     `translate(${-editor.scrollLeft}px, ${-editor.scrollTop}px)`;
   gutter.scrollTop = editor.scrollTop;
+  syncPreviewToEditor();
 }
 
 /* ── toolbar actions (mirror gui/app.py) ─────── */
@@ -634,6 +722,238 @@ function replaceAll(){
   $("findStatus").textContent = `replaced ${n} occurrence${n !== 1 ? "s" : ""}`;
 }
 
+/* ═══ Live preview pane — mirror of gui/preview_render.py ═══ */
+const _GREEK = {alpha:"α",beta:"β",gamma:"γ",delta:"δ",epsilon:"ε",varepsilon:"ϵ",zeta:"ζ",eta:"η",theta:"θ",vartheta:"ϑ",iota:"ι",kappa:"κ",lambda:"λ",mu:"μ",nu:"ν",xi:"ξ",pi:"π",rho:"ρ",sigma:"σ",tau:"τ",upsilon:"υ",phi:"φ",varphi:"ϕ",chi:"χ",psi:"ψ",omega:"ω",Gamma:"Γ",Delta:"Δ",Theta:"Θ",Lambda:"Λ",Xi:"Ξ",Pi:"Π",Sigma:"Σ",Upsilon:"Υ",Phi:"Φ",Psi:"Ψ",Omega:"Ω"};
+const _SYMBOLS = {infty:"∞",in:"∈",notin:"∉",subset:"⊂",subseteq:"⊆",supset:"⊃",supseteq:"⊇",leq:"≤",geq:"≥",neq:"≠",le:"≤",ge:"≥",ne:"≠",lt:"<",gt:">",approx:"≈",equiv:"≡",cdot:"·",times:"×",div:"÷",pm:"±",mp:"∓",mid:"∣",to:"→",rightarrow:"→",leftarrow:"←",Rightarrow:"⇒",ldots:"…",cdots:"⋯",dots:"…",sum:"Σ",prod:"∏",int:"∫",oint:"∮",partial:"∂",nabla:"∇",forall:"∀",exists:"∃",neg:"¬",wedge:"∧",vee:"∨",cup:"∪",cap:"∩",emptyset:"∅",prime:"′",star:"⋆"};
+const _SUB_MAP = {"0":"₀","1":"₁","2":"₂","3":"₃","4":"₄","5":"₅","6":"₆","7":"₇","8":"₈","9":"₉","+":"₊","-":"₋","=":"₌","(":"₍",")":"₎","a":"ₐ","e":"ₑ","h":"ₕ","i":"ᵢ","j":"ⱼ","k":"ₖ","l":"ₗ","m":"ₘ","n":"ₙ","o":"ₒ","p":"ₚ","r":"ᵣ","s":"ₛ","t":"ₜ","u":"ᵤ","v":"ᵥ","x":"ₓ"};
+const _SUP_MAP = {"0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹","+":"⁺","-":"⁻","=":"⁼","(":"⁽",")":"⁾","n":"ⁿ","i":"ⁱ"," ":"·","x":"ˣ","a":"ᵃ","b":"ᵇ","d":"ᵈ","e":"ᵉ","h":"ʰ","j":"ʲ","k":"ᵏ","l":"ˡ","m":"ᵐ","o":"ᵒ","p":"ᵖ","r":"ʳ","s":"ˢ","t":"ᵗ","u":"ᵘ","v":"ᵛ","w":"ʷ"};
+const _ACCENTS = [["hat","\u0302"],["bar","\u0304"],["tilde","\u0303"],["vec","\u20d7"],["dot","\u0307"],["ddot","\u0308"],["prime","′"]];
+const _BB = {R:"ℝ",N:"ℕ",Z:"ℤ",Q:"ℚ",C:"ℂ",P:"ℙ",H:"ℍ"};
+
+function _mapOrRaw(content, map, open, close){
+  const ok = [...content].every(c => c.trim()==="" || c.charCodeAt(0) > 127 || map[c] !== undefined);
+  if (!ok) return content.length !== 1 ? open+"{"+content+"}" : open+content;
+  return [...content].map(c => map[c] !== undefined ? map[c] : c).join("");
+}
+function latexToPretty(latex){
+  let s = latex.trim();
+  s = s.replace(/\\left/g,"").replace(/\\right/g,"");
+  s = s.replace(/\\!/g,"").replace(/\\,/g," ").replace(/\\;/g," ");
+  s = s.replace(/\\\{/g,"\x01").replace(/\\\}/g,"\x02");
+  s = s.replace(/\\qquad/g,"\x04").replace(/\\quad/g,"\x03");
+  s = s.replace(/\\sqrt\[([^\]]*)\]\{([^{}]*)\}/g, "$2^(1/$1)");
+  for (let i=0;i<8;i++){ const n = s.replace(/\\sqrt\{([^{}]*)\}/g, "√($1)"); if (n===s) break; s=n; }
+  for (let i=0;i<8;i++){ const n = s.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "($1)/($2)"); if (n===s) break; s=n; }
+  for (const [name, mark] of _ACCENTS)
+    for (let i=0;i<6;i++){ const n = s.replace(new RegExp("\\\\"+name+"\\{([^{}]*)\\}","g"), (_m,c)=>c+mark); if (n===s) break; s=n; }
+  s = s.replace(/\\mathbb\{([^{}]*)\}/g, (_m,c)=>[...c].map(ch=>_BB[ch]||ch).join(""));
+  s = s.replace(/\\(?:mathrm|text|operatorname|mathbf|mathit)\{([^{}]*)\}/g, "$1");
+  for (const w of Object.keys(_GREEK).sort((a,b)=>b.length-a.length))
+    s = s.replace(new RegExp("\\\\"+w+"(?![a-zA-Z])","g"), _GREEK[w]);
+  for (const w of Object.keys(_SYMBOLS).sort((a,b)=>b.length-a.length))
+    s = s.replace(new RegExp("\\\\"+w+"(?![a-zA-Z])","g"), _SYMBOLS[w]);
+  s = s.replace(/\\[a-zA-Z]+/g, "");
+  for (let i=0;i<8;i++){
+    let n = s.replace(/_\{([^{}]*)\}/g, (_m,c)=>_mapOrRaw(c,_SUB_MAP,"_",""));
+    n = n.replace(/\^\{([^{}]*)\}/g, (_m,c)=>_mapOrRaw(c,_SUP_MAP,"^",""));
+    if (n===s) break; s=n;
+  }
+  s = s.replace(/_([A-Za-z0-9])/g, (_m,c)=>_mapOrRaw(c,_SUB_MAP,"_",""));
+  s = s.replace(/\^([A-Za-z0-9])/g, (_m,c)=>_mapOrRaw(c,_SUP_MAP,"^",""));
+  s = s.replace(/\x01/g,"{").replace(/\x02/g,"}");
+  s = s.replace(/\s+/g," ").trim();
+  s = s.replace(/ *\x04 */g,"     ").replace(/ *\x03 */g,"   ");
+  return s;
+}
+
+const _PV_PREVIEW = $("preview");
+let _pvBlocks = [];          // {line, el}
+function pvEsc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function pvSrcTag(line, c0, c1, text, cls){
+  return `<span class="pv-src ${cls}" data-line="${line}" data-c0="${c0}" data-c1="${c1}">${text}</span>`;
+}
+
+function pvRuns(lineText, lineNo){
+  /* mirror runs_for_line: text | math | bare | code, with click spans */
+  const spans = [];
+  for (const m of lineText.matchAll(/`([^`]+)`/g)) spans.push([m.index, m.index+m[0].length, "code"]);
+  for (const re of [INLINE_DOLLAR_RE, INLINE_PAREN_RE]){
+    re.lastIndex = 0;
+    for (const m of lineText.matchAll(re)) spans.push([m.index, m.index+m[0].length, "math"]);
+  }
+  for (const [s,e] of findBareSpans(lineText)) spans.push([s, e, "bare"]);
+  spans.sort((a,b)=>a[0]-b[0]);
+  let out = "", pos = 0;
+  for (const [s,e,kind] of spans){
+    if (s < pos) continue;
+    if (s > pos) out += pvEsc(lineText.slice(pos, s));
+    let raw = lineText.slice(s,e);
+    let pretty;
+    if (kind === "math"){
+      if (raw.startsWith("$$") && raw.endsWith("$$")) raw = raw.slice(2,-2);
+      else if (raw.startsWith("$") && raw.endsWith("$")) raw = raw.slice(1,-1);
+      else if (raw.startsWith("\\(") && raw.endsWith("\\)")) raw = raw.slice(2,-2);
+      pretty = latexToPretty(raw);
+    } else if (kind === "code"){
+      pretty = pvEsc(raw.slice(1,-1));
+    } else {
+      pretty = latexToPretty(raw);
+    }
+    out += pvSrcTag(lineNo, s, e, pvEsc(pretty),
+                    kind === "math" ? "pv-math" : kind === "code" ? "pv-code" : "pv-bare");
+    pos = e;
+  }
+  if (pos < lineText.length) out += pvEsc(lineText.slice(pos));
+  return out || pvEsc(lineText);
+}
+
+function pvCellRuns(cell){ return pvRuns(cell.trim(), -1); }
+
+function renderPreview(){
+  const text = editor.value;
+  const lines = text.split("\n");
+  const disp = new Set();
+  { /* display-math line set — same rules as countDisplay */
+    const fence = fenceSet(lines);
+    let inB = false;
+    for (let i=0;i<lines.length;i++){
+      if (fence.has(i)) continue;
+      const s = lines[i].trim();
+      if (!inB && s.startsWith("$$")){
+        const rest = s.slice(2).trim();
+        if (rest.endsWith("$$") && rest.length >= 2){ if (rest.slice(0,-2).trim()) disp.add(i); }
+        else { inB = true; disp.add(i); }
+      } else if (inB && s.endsWith("$$")){ inB = false; disp.add(i); }
+      else if (inB){ disp.add(i); }
+    }
+  }
+  const fence = fenceSet(lines);
+  const html = [];
+  _pvBlocks = [];
+  let eqNo = 0, i = 0;
+  const fmt = $("eqFmt").value || "({n})";
+  const numbered = $("autonumber").checked;
+
+  while (i < lines.length){
+    const line = lines[i], s = line.trim();
+    const push = (inner) => {
+      html.push(`<div class="pv-block" data-line="${i+1}">${inner}</div>`);
+      _pvBlocks.push({line: i+1, el: null});
+    };
+    if (fence.has(i)){
+      let j = i;
+      while (j + 1 < lines.length && fence.has(j + 1)) j++;
+      push(`<span class="pv-code">${lines.slice(i, j + 1).map(pvEsc).join("\n")}</span>`);
+      i = j + 1;
+      continue;
+    }
+    if (s.startsWith("\\[") && s.endsWith("\\]") && s.length > 3){
+      eqNo++;
+      const raw = s.slice(2,-2).trim();
+      push(`<div class="pv-display">${pvEsc(latexToPretty(raw))}</div>` +
+           (numbered ? `<span class="pv-label">${pvEsc(fmt.replace("{n}", eqNo))}</span>` : ""));
+      i += 1;
+      continue;
+    }
+    if (disp.has(i)){
+      let j = i;
+      while (j+1 < lines.length && disp.has(j+1)) j++;
+      const raw = lines.slice(i,j+1).map(l=>l.trim().replace(/^\$\$|\$\$$/g,"").trim()).filter(Boolean).join(" ");
+      eqNo++;
+      push(`<div class="pv-display">${pvEsc(latexToPretty(raw))}</div>` +
+           (numbered ? `<span class="pv-label">${pvEsc(fmt.replace("{n}", eqNo))}</span>` : ""));
+      i = j + 1;
+      continue;
+    }
+    if (!s){ i += 1; continue; }
+    const h = s.match(/^(#{1,4})\s+(.*)$/);
+    if (h){ push(`<span class="pv-h${h[1].length}">${pvRuns(h[2], i+1)}</span>`); i += 1; continue; }
+    if (/^-{3,}$/.test(s)){ i += 1; continue; }
+    if (s.startsWith("|") && s.endsWith("|")){
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")){
+        const t = lines[i].trim();
+        if (!/^\|[\s:|-]+\|$/.test(t))
+          rows.push(t.slice(1,-1).split("|").map(c => pvCellRuns(c)).join(" │ "));
+        i++;
+      }
+      push(`<div class="pv-table">${rows.join("\n")}</div>`);
+      continue;
+    }
+    if (s.startsWith("> ")){
+      push(`<div class="pv-quote">${pvRuns(s.slice(2), i+1)}</div>`); i += 1; continue;
+    }
+    if (/^([-*+]|\d+[.)])\s/.test(s)){
+      push(`<div class="pv-p">• ${pvRuns(s.replace(/^([-*+]|\d+[.)])\s/, ""), i+1)}</div>`);
+      i += 1; continue;
+    }
+    /* paragraph */
+    const para = [pvRuns(line.replace(/^\s*[-*+]\s*/, ""), i+1)];
+    while (i+1 < lines.length){
+      const n = lines[i+1].trim();
+      if (!n || n.startsWith("#") || n.startsWith("|") || n.startsWith("> ") ||
+          n.startsWith("$$") || disp.has(i+1) || fence.has(i+1) ||
+          /^([-*+]|\d+[.)])\s/.test(n)) break;
+      i++;
+      para.push(pvRuns(lines[i], i+1));
+    }
+    push(`<div class="pv-p">${para.join(" ")}</div>`);
+    i += 1;
+  }
+  _PV_PREVIEW.innerHTML = html.join("\n");
+  _pvBlocks = [..._PV_PREVIEW.querySelectorAll(".pv-block")].map((el, k) => ({
+    line: parseInt(el.dataset.line, 10), el
+  }));
+  syncPreviewToEditor();
+}
+
+function syncPreviewToEditor(){
+  /* scroll preview to the block nearest the editor's first visible line */
+  if (!_pvBlocks.length) return;
+  const style = getComputedStyle(editor);
+  const lh = parseFloat(style.lineHeight) || 16;
+  const topLine = Math.floor(editor.scrollTop / lh) + 1;
+  let target = _pvBlocks[0];
+  for (const b of _pvBlocks){ if (b.line <= topLine) target = b; else break; }
+  if (target && target.el) _PV_PREVIEW.scrollTop = target.el.offsetTop - 12;
+}
+
+_PV_PREVIEW.addEventListener("click", e => {
+  const t = e.target.closest(".pv-src");
+  if (!t || t.dataset.line === "-1") return;
+  const line = parseInt(t.dataset.line, 10), c0 = +t.dataset.c0, c1 = +t.dataset.c1;
+  const lines = editor.value.split("\n");
+  let off = 0;
+  for (let k = 0; k < line-1; k++) off += lines[k].length + 1;
+  editor.focus();
+  editor.setSelectionRange(off + c0, off + c1);
+  const lh = parseFloat(getComputedStyle(editor).lineHeight) || 16;
+  editor.scrollTop = Math.max(0, (line - 3) * lh);
+  syncScroll();
+  render();
+});
+
+function wrapFormula(){
+  const a = editor.selectionStart, b = editor.selectionEnd;
+  if (a === b){ logLine("Select a formula first, then press Ctrl+M"); return; }
+  const sel = editor.value.slice(a, b);
+  let wrapped;
+  if (sel.trim().startsWith("$")) wrapped = sel;
+  else if (sel.trim().includes("\n")) wrapped = "$$\n" + sel.trim() + "\n$$";
+  else wrapped = "$" + sel.trim() + "$";
+  editor.value = editor.value.slice(0,a) + wrapped + editor.value.slice(b);
+  editor.setSelectionRange(a, a + wrapped.length);
+  render();
+  logLine("Formula wrapped — preview updated");
+}
+
+let _pvJob = null;
+function schedulePreview(){
+  if (_pvJob) clearTimeout(_pvJob);
+  _pvJob = setTimeout(() => { _pvJob = null; renderPreview(); }, 120);
+}
+
 /* ── log (same message shapes as _poll_queue) ── */
 function logLine(msg){
   const log = $("log");
@@ -706,6 +1026,8 @@ document.addEventListener("keydown", e => {
   if (e.ctrlKey && e.key === "f"){ e.preventDefault(); toggleFind(true); }
   else if (e.key === "F3"){ e.preventDefault(); findNext(e.shiftKey); }
   else if (e.ctrlKey && e.key === "Enter"){ e.preventDefault(); convert(); }
+  else if (e.ctrlKey && e.key.toLowerCase() === "m"){ e.preventDefault(); wrapFormula(); }
+  else if (e.key === "F5"){ e.preventDefault(); renderPreview(); }
   else if (e.ctrlKey && e.key.toLowerCase() === "o"){ e.preventDefault(); openFile(); }
   else if (e.ctrlKey && e.key.toLowerCase() === "s"){ e.preventDefault(); browseOutput(); }
   else if (e.key === "Escape"){ toggleFind(false); }

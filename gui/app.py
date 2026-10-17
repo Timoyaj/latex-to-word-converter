@@ -25,7 +25,7 @@ import threading
 import queue
 from pathlib import Path
 from tkinter import (
-    Tk, Text, StringVar, BooleanVar,
+    Tk, Toplevel, Text, StringVar, BooleanVar,
     filedialog, messagebox,
     END, DISABLED, NORMAL, WORD, HORIZONTAL, BOTH, LEFT, RIGHT, X, Y, TOP, BOTTOM,
     NW, SE, E, W, SUNKEN, FLAT, VERTICAL,
@@ -43,7 +43,9 @@ from core.converter import LatexToWordConverter
 from core.math_tokens import (
     count_display_math, split_inline_math, is_fence_line, fence_marker,
     INLINE_DOLLAR_RE, INLINE_PAREN_RE, find_bare_math_in_line,
+    normalize_bare_math,
 )
+from gui.preview_render import render_document
 
 APP_NAME = "LaTeX → Word Converter"
 APP_VERSION = "1.1"
@@ -204,6 +206,10 @@ class ConverterApp:
                    command=self._paste).pack(side=LEFT, padx=2)
         ttk.Button(tb, text="🔍 Find", style="Tool.TButton",
                    command=self.toggle_find_bar).pack(side=LEFT, padx=2)
+        ttk.Button(tb, text="📐 Wrap formula", style="Tool.TButton",
+                   command=self._wrap_formula).pack(side=LEFT, padx=2)
+        ttk.Button(tb, text="🩺 Inspect", style="Tool.TButton",
+                   command=self._open_inspector).pack(side=LEFT, padx=2)
         ttk.Button(tb, text="🗑 Clear", style="Tool.TButton",
                    command=self._clear).pack(side=LEFT, padx=2)
 
@@ -222,8 +228,18 @@ class ConverterApp:
         ttk.Label(tb, textvariable=self._eq_count_var,
                   font=("Segoe UI", 9), foreground="#6366f1").pack(side=RIGHT, padx=6)
 
+        # ── main split: editor (left) | live preview (right) ─────
+        paned = ttk.PanedWindow(outer, orient=HORIZONTAL)
+        paned.pack(fill=BOTH, expand=True, pady=(0, 6))
+        self._paned = paned
+
+        left = ttk.Frame(paned)
+        right = ttk.Frame(paned)
+        paned.add(left, weight=3)
+        paned.add(right, weight=2)
+
         # ── find & replace bar (hidden until Ctrl+F) ──────────────
-        self.find_frame = ttk.Frame(outer, padding=(8, 6))
+        self.find_frame = ttk.Frame(left, padding=(8, 6))
         self._find_visible = False
 
         ttk.Label(self.find_frame, text="Find:").pack(side=LEFT)
@@ -256,8 +272,8 @@ class ConverterApp:
                    command=lambda: self.toggle_find_bar(False)).pack(side=RIGHT)
 
         # ── editor (gutter + text + scrollbars) ───────────────────
-        ed_frame = ttk.LabelFrame(outer, text="LaTeX / Markdown Input", padding=4)
-        ed_frame.pack(fill=BOTH, expand=True, pady=(0, 6))
+        ed_frame = ttk.LabelFrame(left, text="LaTeX / Markdown Input", padding=4)
+        ed_frame.pack(fill=BOTH, expand=True)
 
         self.gutter = Text(
             ed_frame, width=4, padx=6, pady=6, takefocus=0,
@@ -305,6 +321,52 @@ class ConverterApp:
         self.editor.bind("<ButtonRelease-1>", self._on_editor_change)
         self.editor.bind("<Configure>", self._on_editor_change)
 
+        # ── live conversion preview (right pane) ─────────────────
+        pv_frame = ttk.LabelFrame(right, text="Live Preview  (click a formula to jump to source)",
+                                  padding=4)
+        pv_frame.pack(fill=BOTH, expand=True)
+
+        self.preview = Text(
+            pv_frame, wrap=WORD, state=DISABLED,
+            font=("Georgia", 11), bg="#ffffff", fg="#1e293b",
+            relief=FLAT, borderwidth=0, padx=10, pady=8,
+            cursor="arrow", spacing1=2, spacing3=6,
+        )
+        self.preview.pack(fill=BOTH, expand=True)
+
+        self.preview.tag_configure("h1", font=("Georgia", 15, "bold"),
+                                   spacing1=10, spacing3=4)
+        self.preview.tag_configure("h2", font=("Georgia", 13, "bold"),
+                                   spacing1=8, spacing3=3)
+        self.preview.tag_configure("h3", font=("Georgia", 12, "bold italic"),
+                                   spacing1=6, spacing3=2)
+        self.preview.tag_configure("h4", font=("Georgia", 11, "bold"),
+                                   spacing1=6, spacing3=2)
+        self.preview.tag_configure("math_run", foreground="#1d4ed8")
+        self.preview.tag_configure("bare_run", foreground="#c2410c",
+                                   underline=True)
+        self.preview.tag_configure("display_run", foreground="#1d4ed8",
+                                   justify="center", font=("Georgia", 12),
+                                   spacing1=8, spacing3=2)
+        self.preview.tag_configure("eq_label", foreground="#94a3b8",
+                                   justify="right")
+        self.preview.tag_configure("code_run", font=("Consolas", 9.5),
+                                   background="#f1f5f9", foreground="#475569")
+        self.preview.tag_configure("quote_run", font=("Georgia", 11, "italic"),
+                                   lmargin1=18, lmargin2=18,
+                                   foreground="#475569")
+        self.preview.tag_configure("table_run", font=("Georgia", 10.5),
+                                   lmargin1=6, foreground="#334155")
+        self.preview.tag_configure("rule_run", foreground="#cbd5e1")
+        self.preview.tag_configure("formula_hot", background="#eef2ff")
+
+        self.preview.bind("<Button-1>", self._on_preview_click)
+        self.preview.bind("<Double-Button-1>", lambda e: self._open_inspector())
+
+        self._preview_srcmap: dict = {}
+        self._preview_line_index: list = []
+        self._preview_job = None
+
         # ── options panel ─────────────────────────────────────────
         opt = ttk.LabelFrame(outer, text="Conversion Options", padding=(8, 4))
         opt.pack(fill=X, pady=(0, 6))
@@ -341,7 +403,7 @@ class ConverterApp:
         act.pack(fill=X, pady=(0, 4))
 
         self.convert_btn = ttk.Button(
-            act, text="⚡  Convert to Word  (Ctrl+Return)",
+            act, text="⚡  Convert & Save  (Ctrl+Return)",
             style="Accent.TButton",
             command=self._start_conversion,
         )
@@ -465,9 +527,12 @@ class ConverterApp:
         r.bind("<Control-o>", lambda e: self._open_file())
         r.bind("<Control-s>", lambda e: self._browse_output())
         r.bind("<Control-f>", lambda e: self.toggle_find_bar(True))
+        r.bind("<Control-M>", self._wrap_formula)
+        r.bind("<Control-m>", self._wrap_formula)
         r.bind("<F3>", lambda e: self._find_next())
         r.bind("<Shift-F3>", lambda e: self._find_next(backwards=True))
         r.bind("<Control-Return>", lambda e: self._start_conversion())
+        r.bind("<F5>", lambda e: self._refresh_preview())
 
     # ------------------------------------------------------------------
     # Restore persisted settings
@@ -758,6 +823,7 @@ class ConverterApp:
         words = len(re.findall(r"\S+", text.rstrip("\n")))
         chars = len(text.rstrip("\n"))
         self._update_status(words, chars)
+        self._schedule_preview_refresh()
 
     def _update_status(self, words=None, chars=None):
         try:
@@ -772,6 +838,264 @@ class ConverterApp:
         self._status_var.set(
             f"{name}   ·   Ln {row}, Col {int(col) + 1}   ·   "
             f"{words} words, {chars} chars")
+
+    # ------------------------------------------------------------------
+    # Live preview pane
+    # ------------------------------------------------------------------
+    def _schedule_preview_refresh(self):
+        if self._preview_job is not None:
+            try:
+                self.root.after_cancel(self._preview_job)
+            except Exception:
+                pass
+        self._preview_job = self.root.after(120, self._refresh_preview)
+
+    def _refresh_preview(self):
+        self._preview_job = None
+        pv = self.preview
+        pv.configure(state=NORMAL)
+        pv.delete("1.0", END)
+        self._preview_srcmap = {}
+        self._preview_line_index = []
+
+        text = self.editor.get("1.0", END)
+        try:
+            blocks = render_document(
+                text,
+                number_equations=self.autonumber_var.get(),
+                eq_format=self.eq_fmt_var.get() or "({n})")
+        except Exception:
+            blocks = []
+
+        for b in blocks:
+            kind = b["kind"]
+            self._preview_line_index.append(
+                (b.get("line", 1), pv.index(END + "-1c")))
+            if kind == "heading":
+                for r in b["runs"]:
+                    self._insert_preview_run(r, f"h{b['level']}")
+                pv.insert(END, "\n")
+            elif kind == "display":
+                tag = self._preview_tag(b.get("src"))
+                pv.insert(END, b["pretty"] + "\n", ("display_run", tag))
+                if b.get("label"):
+                    pv.insert(END, b["label"] + "\n", ("eq_label",))
+                pv.insert(END, "\n")
+            elif kind == "code":
+                for ln in b["lines"]:
+                    pv.insert(END, ln + "\n", "code_run")
+                pv.insert(END, "\n")
+            elif kind == "table":
+                for row in b["rows"]:
+                    cells = [" ".join(rr["pretty"] for rr in cell)
+                             for cell in row]
+                    pv.insert(END, " │ ".join(cells) + "\n", "table_run")
+                pv.insert(END, "\n")
+            elif kind == "quote":
+                for r in b["runs"]:
+                    self._insert_preview_run(r, "quote_run")
+                pv.insert(END, "\n")
+            elif kind == "list":
+                pv.insert(END, "• ", "table_run")
+                for r in b["runs"]:
+                    self._insert_preview_run(r, "")
+                pv.insert(END, "\n")
+            else:  # para
+                for r in b["runs"]:
+                    if r["text"] == "\n":
+                        pv.insert(END, " ")
+                    else:
+                        self._insert_preview_run(r, "")
+                pv.insert(END, "\n\n")
+
+        pv.configure(state=DISABLED)
+        self._sync_preview_to_editor()
+
+    def _insert_preview_run(self, run: dict, base_tag: str):
+        kind = run.get("kind", "text")
+        extra = {"math": "math_run", "bare": "bare_run",
+                 "bare_math": "bare_run", "code": "code_run"}.get(kind, "")
+        tags = tuple(t for t in (base_tag, extra) if t)
+        tag = self._preview_tag(run.get("src"))
+        self.preview.insert(END, run.get("pretty", run.get("text", "")),
+                            tags + (tag,) if tag else tags)
+
+    def _preview_tag(self, src):
+        if not src:
+            return ""
+        tag = f"src_{src[0]}_{src[1]}_{src[2]}"
+        self._preview_srcmap[tag] = src
+        self.preview.tag_bind(tag, "<Enter>",
+                              lambda e: self.preview.configure(cursor="hand2"))
+        self.preview.tag_bind(tag, "<Leave>",
+                              lambda e: self.preview.configure(cursor="arrow"))
+        return tag
+
+    def _on_preview_click(self, event):
+        idx = self.preview.index(f"@{event.x},{event.y}")
+        for tag in self.preview.tag_names(idx):
+            if tag.startswith("src_") and tag in self._preview_srcmap:
+                self._jump_to_source(*self._preview_srcmap[tag])
+                return
+
+    def _jump_to_source(self, line: int, c0: int, c1: int):
+        self.editor.tag_remove("sel", "1.0", END)
+        start, end = f"{line}.{c0}", f"{line}.{c1}"
+        self.editor.mark_set("insert", start)
+        self.editor.tag_add("sel", start, end)
+        self.editor.see(start)
+        self.editor.focus_set()
+        self._update_status()
+
+    def _sync_preview_to_editor(self):
+        """Scroll the preview to the block nearest the editor's top line."""
+        if not self._preview_line_index:
+            return
+        try:
+            top_line = int(self.editor.index("@0,0").split(".")[0])
+        except Exception:
+            return
+        target = self._preview_line_index[0][1]
+        for line, pidx in self._preview_line_index:
+            if line <= top_line:
+                target = pidx
+            else:
+                break
+        try:
+            self.preview.see(target)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Formula repair helpers: wrap-as-formula + Formula Inspector
+    # ------------------------------------------------------------------
+    def _wrap_formula(self, _event=None):
+        """Wrap the current selection as $…$ (or $$…$$ when multi-line).
+        Fixes partial detections without retyping.  Returns 'break' when
+        bound to a key event so Text inserts nothing."""
+        try:
+            sel = self.editor.get("sel.first", "sel.last")
+            start, end = self.editor.index("sel.first"), self.editor.index("sel.last")
+        except Exception:
+            sel = ""
+        if not sel.strip():
+            self._status_var.set("Select a formula first, then press Ctrl+M")
+            return "break" if _event else None
+        body = sel.strip("\n")
+        if body.strip().startswith("$"):
+            wrapped = body               # already delimited
+        elif "\n" in body.strip():
+            wrapped = f"$$\n{body.strip()}\n$$"
+        else:
+            wrapped = f"${body.strip()}$"
+        self.editor.delete(start, end)
+        self.editor.insert(start, wrapped)
+        self._on_editor_change()
+        self._status_var.set("Formula wrapped — preview updated")
+        return "break" if _event else None
+
+    def _open_inspector(self, _event=None):
+        """Formula Inspector dialog: edit a (possibly partial) formula,
+        preview its normalized form and conversion status, then insert it
+        as inline math, display math, or code."""
+        win = Toplevel(self.root)
+        win.title("Formula Inspector")
+        win.transient(self.root)
+        win.configure(bg=BG)
+        win.geometry("620x460")
+        win.grab_set()
+
+        outer = ttk.Frame(win, padding=14)
+        outer.pack(fill=BOTH, expand=True)
+
+        ttk.Label(outer, text="Formula source  (edit freely — partial detections, "
+                              "double spaces and stray periods are tolerated)",
+                  style="Subtitle.TLabel").pack(anchor=W)
+        src = Text(outer, height=4, wrap=WORD, font=("Consolas", 11),
+                   bg="#fff7ed", relief=FLAT, borderwidth=1, padx=6, pady=4)
+        src.pack(fill=X, pady=(4, 10))
+
+        # pre-fill: selection → clicked span → current line
+        initial = ""
+        try:
+            initial = self.editor.get("sel.first", "sel.last")
+        except Exception:
+            initial = ""
+        if not initial.strip():
+            line = self.editor.get("insert linestart", "insert lineend")
+            initial = line.strip()
+        src.insert("1.0", initial.strip())
+
+        ttk.Label(outer, text="Normalized / pretty form:",
+                  style="Subtitle.TLabel").pack(anchor=W)
+        norm_var = StringVar()
+        ttk.Label(outer, textvariable=norm_var, font=("Georgia", 12, "bold"),
+                  foreground="#1d4ed8", wraplength=570,
+                  background="#ffffff", padding=8).pack(fill=X, pady=(4, 10))
+
+        status_var = StringVar()
+        status_lbl = ttk.Label(outer, textvariable=status_var,
+                               font=("Segoe UI", 10, "bold"))
+        status_lbl.pack(anchor=W)
+
+        def refresh(*_a):
+            body = src.get("1.0", END).strip()
+            if not body:
+                norm_var.set("(empty)")
+                status_var.set("")
+                return
+            norm = normalize_bare_math(body)
+            from gui.preview_render import latex_to_pretty
+            norm_var.set(latex_to_pretty(norm))
+            try:
+                from docx.oxml.ns import qn as _qn  # noqa: F401
+                ok = bool(LatexToWordConverter().latex_to_omml(norm))
+            except Exception:
+                ok = False
+            if ok:
+                status_var.set("✓ converts to Word math (math zone)")
+            else:
+                status_var.set("✗ will fall back to plain text — try fixing the source above")
+
+        src.bind("<KeyRelease>", refresh)
+        refresh()
+
+        btns = ttk.Frame(outer)
+        btns.pack(fill=X, pady=16)
+
+        def finish(mode):
+            body = src.get("1.0", END).strip()
+            if not body:
+                win.destroy()
+                return
+            if mode == "inline":
+                ins = f"${body}$"
+            elif mode == "display":
+                ins = f"$$\n{body}\n$$"
+            else:
+                ins = f"`{body}`"
+            try:
+                sel_start = self.editor.index("sel.first")
+                sel_end = self.editor.index("sel.last")
+                self.editor.delete(sel_start, sel_end)
+            except Exception:
+                sel_start = self.editor.index("insert")
+            self.editor.insert(sel_start, ins)
+            self._on_editor_change()
+            win.destroy()
+
+        ttk.Button(btns, text="Insert as  $formula$",
+                   style="Accent.TButton",
+                   command=lambda: finish("inline")).pack(side=LEFT, padx=4)
+        ttk.Button(btns, text="Insert as display  $$…$$",
+                   command=lambda: finish("display")).pack(side=LEFT, padx=4)
+        ttk.Button(btns, text="Mark as code (skip math)",
+                   command=lambda: finish("code")).pack(side=LEFT, padx=4)
+        ttk.Button(btns, text="Cancel",
+                   command=win.destroy).pack(side=RIGHT, padx=4)
+
+        src.focus_set()
+        return win
 
     # ------------------------------------------------------------------
     # Conversion

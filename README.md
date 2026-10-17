@@ -35,9 +35,20 @@ Most Markdown-to-Word tools (like default Pandoc setups) rasterize LaTeX equatio
 - **Modern Desktop GUI**:
   - Dark-themed code editor with line numbers, current-line highlight, and
     real-time LaTeX syntax highlighting driven by the shared math tokenizer.
+  - **Live conversion preview** in a split pane beside the editor: a white
+    "paper" view showing headings, tables, code and Unicode-prettified math
+    (fractions, roots, greek, sub/superscripts) exactly as the conversion will
+    treat them. The preview follows the editor as you scroll, and **clicking a
+    formula jumps to its source** (or vice-versa via scroll sync).
+  - **Formula repair tools**: `Ctrl+M` wraps a partial selection as `$…$`
+    (or `$$…$$` when multi-line), and the **Formula Inspector** lets you edit a
+    formula, preview its normalized form, see whether it converts to Word math
+    or will fall back to text, and insert it as inline math, display math, or
+    code — all **before** saving anything to disk. The Convert button is now
+    *Convert & Save*, making the vet-then-save flow explicit.
   - Menu bar with keyboard shortcuts: `Ctrl+O` open, `Ctrl+S` save output,
     `Ctrl+F` find & replace (with match count), `F3`/`Shift+F3` find next/prev,
-    `Ctrl+Return` convert.
+    `Ctrl+M` wrap as formula, `F5` refresh preview, `Ctrl+Return` convert & save.
   - Live equation counter and status bar (caret position, word count,
     display/inline equation counts).
   - Template dropdown / Insert menu for quick insertion of fractions,
@@ -140,8 +151,19 @@ The desktop application (`gui/app.py`) provides an intuitive authoring and conve
 - **Editor**: Multi-line editor styled in Catppuccin Mocha colors with gold/green syntax
   highlighting for mathematical blocks, a line-number gutter, current-line highlight,
   scrollbars, undo/redo, and find & replace.
+- **Live Preview pane** (split beside the editor): renders the whole document —
+  headings, paragraphs, quotes, lists, code fences, tables and equations — as it
+  will convert. Math is shown in Unicode (`\frac{-b \pm \sqrt{b^2-4ac}}{2a}` →
+  `(-b ± √(b²-4ac))/(2a)`, `N_h` → `Nₕ`) with auto-numbered display labels.
+  The preview tracks the editor's scroll position; clicking any formula selects
+  its exact source span in the editor. Press `F5` to force a refresh.
+- **Formula repair**: select a partial or delimiter-less formula and press
+  `Ctrl+M` to wrap it as `$…$`/`$$…$$`, or open the **Formula Inspector** to
+  edit it, inspect the normalized form and conversion status (math zone vs.
+  text fallback), and insert it as inline math, display math, or code — vetting
+  the whole conversion before anything is written to disk.
 - **Menus & shortcuts**: File (`Ctrl+O`, `Ctrl+S`), Edit (find/replace, undo/redo),
-  Insert (templates), Help (About). Convert with `Ctrl+Return`.
+  Insert (templates), Help (About). Convert & save with `Ctrl+Return`.
 - **Template Library** (toolbar dropdown or Insert menu): one-click insertion of common
   mathematical constructs:
   - Fractions: `$$\frac{a}{b}$$`

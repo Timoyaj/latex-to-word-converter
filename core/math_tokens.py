@@ -68,6 +68,7 @@ _CODE_SPAN_RE = re.compile(r"(`+)(.+?)\1")
 # Public aliases so the GUI editor can highlight with the exact same rules.
 INLINE_DOLLAR_RE = _INLINE_DOLLAR_RE
 INLINE_PAREN_RE = _INLINE_PAREN_RE
+CODE_SPAN_RE = _CODE_SPAN_RE
 
 
 # ── bare math (formulas written WITHOUT $ or \( delimiters) ────────────────
@@ -85,6 +86,12 @@ _BARE_SEED_RE = re.compile(
       # operator word + short subscript (max_x ✓, max_size ✗ — identifiers)
       \b(?:sum|prod|int|lim|inf|sup|det|max|min|log|exp|ln)_
         (?:\{|[0-9]|[A-Za-z](?![A-Za-z0-9])) |
+      # single-letter or greek base + short subscript: N_h, W_ij, theta_i
+      \b(?:[A-Za-z]|alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|
+          vartheta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|
+          varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|
+          Upsilon|Phi|Psi|Omega)_
+        (?:\{|\d|[A-Za-z]{1,2}(?![A-Za-z0-9])) |
       \w+_(?:hat|bar|tilde|dot|ddot|star|prime)(?![A-Za-z]) |
       <= | >= | != | ->
     """,
@@ -137,7 +144,8 @@ def find_bare_math(text: str) -> List[Tuple[int, int]]:
             continue
 
         # ── expand left ─────────────────────────────────────────
-        depth = 0
+        # seed may end with an opener (e.g. "_{") that the walk already passed
+        depth = max(0, _close_count(text[s:e]) - _open_count(text[s:e]))
         i = s
         while i > 0:
             ch = text[i - 1]
@@ -147,19 +155,20 @@ def find_bare_math(text: str) -> List[Tuple[int, int]]:
                 if depth == 0:
                     break
                 depth -= 1
-            elif ch == "\n":
-                break
             if depth == 0:
                 if ch in ";,":
                     break
-                if ch == "." and (i - 1 == 0 or text[i - 2] == " "):
-                    # sentence-ending period (not a decimal like 0.05)
-                    if i >= n or text[i] == " " or text[i].isupper() or text[i] in ")]":
+                if ch == ".":
+                    # sentence period = glued to the left, space/end on the
+                    # right; a stray " . " inside a formula (typo) continues
+                    glued = (i - 1 > 0 and text[i - 2] not in " \t")
+                    followed = text[i] if i < n else " "
+                    if glued and followed in " \t":
                         break
                 if ch == "$":
                     break
-            # stopword check at word start
-            if ch == " " and depth == 0:
+            # stopword check at word start (\n and space both act as gaps)
+            if ch in " \n" and depth == 0:
                 word = _word_before(text, i - 1)
                 if word and word.lower() in _BARE_STOPWORDS:
                     break
@@ -167,7 +176,7 @@ def find_bare_math(text: str) -> List[Tuple[int, int]]:
         s = i
 
         # ── expand right ────────────────────────────────────────
-        depth = 0
+        depth = max(0, _open_count(text[s:e]) - _close_count(text[s:e]))
         j = e
         while j < n:
             ch = text[j]
@@ -177,17 +186,17 @@ def find_bare_math(text: str) -> List[Tuple[int, int]]:
                 if depth == 0:
                     break
                 depth -= 1
-            elif ch == "\n":
-                break
             if depth == 0:
                 if ch in ";,":
                     break
-                if ch == "." and (j + 1 >= n or text[j + 1] == " "):
-                    if j + 1 >= n or text[j + 1] == " " or text[j + 1].isupper():
+                if ch == ".":
+                    glued = (j > 0 and text[j - 1] not in " \t")
+                    followed = text[j + 1] if j + 1 < n else " "
+                    if glued and followed in " \t":
                         break
                 if ch == "$":
                     break
-            if ch == " " and depth == 0:
+            if ch in " \n" and depth == 0:
                 word = _word_after(text, j + 1)
                 if word and word.lower() in _BARE_STOPWORDS:
                     break
@@ -196,7 +205,7 @@ def find_bare_math(text: str) -> List[Tuple[int, int]]:
 
         span = text[s:e].strip()
         # trim dangling punctuation and connectives at the edges
-        span = span.strip(" \t.,;:")
+        span = span.strip(" \t\n.,;:")
         for wd in ("in", "and", "or", "for", "with", "of", "to", "on", "at",
                    "by", "is", "are", "as", "but"):
             if span.lower().endswith(" " + wd):
@@ -215,31 +224,52 @@ def find_bare_math(text: str) -> List[Tuple[int, int]]:
 
 
 # trailing word with optional sub/superscript part, e.g. "Y_k", "w_1k", "code"
-_EDGE_WORD_RE = re.compile(
-    r'^(?P<base>[A-Za-z][A-Za-z0-9]*)(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?$')
+_EDGE_TOKEN_RE = re.compile(
+    r'[A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?')
+_EDGE_KEEP_OPS = re.compile(r'(<=|>=|!=|->|[=<>+*|])')
 
 
 def _trim_prose_edges(span: str) -> str:
-    """Drop trailing prose nouns (``sum_1 code`` → ``sum_1``).
+    """Shrink a span until both edges look like math, not prose.
 
-    A trailing word survives only when it is part of the math: numeric, a
-    bracketed close, allowed vocabulary (greek/operators/relations), a
-    single-letter identifier, or an identifier carrying a sub/superscript
-    (``Y_k``, ``w_1k``). Leading words are only cut by the stopword pass
-    above, so expressions like ``speed >= 3`` keep their subject.
+    An edge token survives when it carries a sub/superscript (``N_h``,
+    ``Y_k``), is a single-letter identifier or allowed vocabulary
+    (greek/operators/relations), is numeric, or sits directly against a
+    relation/assignment operator (``speed >= 3``, ``y_i = speed`` keep their
+    subjects). Everything else is prose creeping in from expansion
+    (``sample size N_h`` → ``N_h``, ``sum_1 code`` → ``sum_1``).
     """
-    while True:
-        m = re.search(r'([A-Za-z][A-Za-z0-9]*)\s*$', span)
-        if not m:
-            return span
-        word = m.group(1)
-        rest = span[:m.start()].rstrip()
-        wm = _EDGE_WORD_RE.match(span[m.start():].strip())
-        has_sub = bool(wm and wm.group(0) != word)
-        if (word in _ALLOWED_FORMULA_WORDS or len(word) == 1 or has_sub
-                or not rest):
-            return span
-        span = rest
+    def keep(tok_start: int, tok_end: int, side: str) -> bool:
+        tok = span[tok_start:tok_end]
+        m = _EDGE_TOKEN_RE.match(tok)
+        base = m.group(0).split("_")[0].split("^")[0] if m else tok
+        has_sub = bool(m and m.group(0) != base)
+        if has_sub or base in _ALLOWED_FORMULA_WORDS or len(base) == 1:
+            return True
+        if base.isdigit():
+            return True
+        if side == "left":
+            if _EDGE_KEEP_OPS.match((span[tok_end:tok_end + 8] or "").lstrip()):
+                return True
+        else:
+            if _EDGE_KEEP_OPS.search((span[:tok_start] or "")[-6:]):
+                return True
+        return False
+
+    while span:
+        # left edge
+        m = re.match(r'([A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?)\s+', span)
+        if m and not keep(0, m.end(1), "left"):
+            span = span[m.end():]
+            continue
+        # right edge
+        m = re.search(r'\s+([A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?)$', span)
+        if m and not keep(m.start(1), m.end(1), "right"):
+            span = span[:m.start()].rstrip()
+            continue
+        # single-token span: keep as-is
+        return span
+    return span
 
 
 def _word_before(text: str, idx: int) -> str:
@@ -254,6 +284,14 @@ def _word_after(text: str, idx: int) -> str:
     while j < len(text) and (text[j].isalpha() or text[j] == "_"):
         j += 1
     return text[idx:j]
+
+
+def _open_count(s: str) -> int:
+    return sum(s.count(c) for c in "([{")
+
+
+def _close_count(s: str) -> int:
+    return sum(s.count(c) for c in ")]}")
 
 
 def _merge_spans(spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
@@ -314,6 +352,9 @@ def normalize_bare_math(s: str) -> str:
     set braces, ``*`` → ``\\cdot``, comparisons (<= → \\leq), multi-char
     subscripts (w_1k → w_{1k}) and parenthesised exponents (n^(-1/2)).
     """
+    # 0. drop stray typographical periods ("n^(-1/2) .  +" → "n^(-1/2) +")
+    s = re.sub(r'\s+\.(?=\s|$)', '', s)
+
     # 1. spelled greek letters → commands (theta_hat later becomes \hat{\theta})
     for w in _GREEK_WORDS:
         s = re.sub(rf'(?<![A-Za-z\\])({w})(?![A-Za-z])', r'\\\1', s)

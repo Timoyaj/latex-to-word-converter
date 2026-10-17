@@ -131,6 +131,14 @@ class LatexToWordConverter:
         in_code_fence = False
         code_fence_marker = ""
         code_buf: List[str] = []
+        para_buf: List[str] = []    # consecutive prose lines → one paragraph
+        para_start_line = 0
+
+        def flush_paragraph():
+            if para_buf:
+                self._cur_line = para_start_line
+                self.add_formatted_paragraph(doc, "\n".join(para_buf))
+                para_buf.clear()
 
         while i < len(lines):
             line = lines[i]
@@ -139,6 +147,7 @@ class LatexToWordConverter:
 
             # ── fenced code blocks (``` / ~~~) ─────────────────────
             if is_fence_line(line):
+                flush_paragraph()
                 marker = fence_marker(line)[0] * 3
                 if not in_code_fence:
                     in_code_fence = True
@@ -168,6 +177,7 @@ class LatexToWordConverter:
 
             # ── display math opener: $$...$$ ──────────────────────
             if stripped.startswith("$$"):
+                flush_paragraph()
                 rest = stripped[2:].strip()
                 if rest.endswith("$$") and len(rest) > 2:
                     # single-line $$...$$
@@ -183,6 +193,7 @@ class LatexToWordConverter:
 
             # ── display math opener: \[ ... \] ────────────────────
             if stripped.startswith("\\["):
+                flush_paragraph()
                 rest = stripped[2:].strip()
                 if rest.endswith("\\]") and len(rest) >= 2:
                     formula = rest[:-2].strip()
@@ -197,6 +208,7 @@ class LatexToWordConverter:
 
             # ── markdown table ────────────────────────────────────
             if stripped.startswith("|") and stripped.endswith("|"):
+                flush_paragraph()
                 in_table = True
                 table_buf.append(stripped)
                 i += 1; continue
@@ -208,13 +220,17 @@ class LatexToWordConverter:
 
             # ── blank ─────────────────────────────────────────────
             if not stripped:
+                flush_paragraph()
                 i += 1; continue
 
             # ── horizontal rule ───────────────────────────────────
             if re.match(r'^-{3,}$', stripped):
+                flush_paragraph()
                 i += 1; continue
 
             # ── headings ──────────────────────────────────────────
+            if stripped.startswith(("#### ", "### ", "## ", "# ")):
+                flush_paragraph()
             if stripped.startswith("#### "):
                 self._add_heading(doc, stripped[5:].strip(), level=4)
             elif stripped.startswith("### "):
@@ -226,32 +242,39 @@ class LatexToWordConverter:
 
             # ── images ────────────────────────────────────────────
             elif stripped.startswith("![") and "](" in stripped and stripped.endswith(")"):
+                flush_paragraph()
                 m = re.match(r"!\[(.*?)\]\((.*?)\)", stripped)
                 if m:
                     self._add_image(doc, m.group(2), m.group(1), output_path)
 
             # ── blockquotes ───────────────────────────────────────
             elif stripped.startswith("> "):
+                flush_paragraph()
                 self._add_blockquote(doc, stripped[2:].strip())
 
             # ── bullet list items (-, *, +) ───────────────────────
             elif re.match(r'^[-*+] ', stripped):
+                flush_paragraph()
                 self._add_list_item(doc, stripped[2:].strip(), numbered=False)
 
             # ── numbered list items (1. / 1) ) ────────────────────
             elif re.match(r'^\d+[.)] ', stripped):
+                flush_paragraph()
                 self._add_list_item(
                     doc, re.sub(r'^\d+[.)] ', '', stripped), numbered=True)
 
-            # ── normal paragraph ──────────────────────────────────
+            # ── normal paragraph (consecutive lines join, as in MD) ─
             else:
-                self.add_formatted_paragraph(doc, stripped)
+                if not para_buf:
+                    para_start_line = i + 1
+                para_buf.append(line.rstrip())
 
             i += 1
 
-        # flush remaining table
+        # flush remaining table / paragraph
         if in_table and table_buf:
             self._add_markdown_table(doc, table_buf)
+        flush_paragraph()
 
         doc.save(output_path)
         self._stats["output_path"] = os.path.abspath(output_path)
