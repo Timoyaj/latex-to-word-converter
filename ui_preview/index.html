@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LaTeX → Word Converter — UI Preview</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --editor-bg:#1e1e2e; --editor-fg:#cdd6f4;
+    --gutter-bg:#181825; --gutter-fg:#6c7086; --line-hl:#2a2a3d;
+    --math-fg:#f9e2af; --display-fg:#a6e3a1; --accent:#1d4ed8;
+    --accent-hov:#2563eb; --log-bg:#f1f5f9; --code-fg:#9399b2;
+    --code-bg:#181825; --muted:#64748b; --counter:#6366f1;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:#e2e8f0; font-family:"Segoe UI", system-ui, sans-serif;
+    display:flex; flex-direction:column; align-items:center; gap:12px;
+    padding:18px 12px; min-height:100vh;
+  }
+  .banner{
+    background:#fef9c3; border:1px solid #eab308; color:#713f12;
+    padding:8px 14px; border-radius:8px; font-size:12.5px; max-width:980px;
+  }
+  .window{
+    width:980px; max-width:100%; height:780px; background:var(--bg);
+    border-radius:10px; box-shadow:0 12px 40px rgba(15,23,42,.25);
+    display:flex; flex-direction:column; padding:10px; gap:6px; overflow:hidden;
+    position:relative;
+  }
+  /* ── menu bar ──────────────────────────────── */
+  .menubar{display:flex; gap:2px; padding:0 2px 2px;}
+  .menu-item{position:relative;}
+  .menu-item>button{
+    border:none; background:transparent; font-size:12.5px;
+    padding:5px 11px; border-radius:6px;
+  }
+  .menu-item>button:hover, .menu-item.open>button{background:#e2e8f0;}
+  .dropdown{
+    display:none; position:absolute; top:100%; left:0; z-index:50;
+    background:#fff; border:1px solid #d8dee9; border-radius:8px;
+    box-shadow:0 10px 24px rgba(15,23,42,.18); min-width:210px; padding:5px;
+  }
+  .menu-item.open .dropdown{display:block;}
+  .dropdown button{
+    display:flex; justify-content:space-between; gap:18px; width:100%;
+    border:none; background:transparent; text-align:left; font-size:12px;
+    padding:7px 10px; border-radius:6px;
+  }
+  .dropdown button:hover{background:#eef2ff; color:var(--accent);}
+  .dropdown button .key{color:var(--muted); font-size:10.5px;}
+  .dropdown .sep{height:1px; background:#e2e8f0; margin:5px 6px;}
+  /* ── title bar ─────────────────────────────── */
+  .titlebar{display:flex; align-items:baseline; gap:12px; padding:2px 4px 4px;}
+  .titlebar h1{font-size:17px; font-weight:700; color:#0f172a;}
+  .titlebar .sub{font-size:9px; color:var(--muted);}
+  /* ── toolbar ───────────────────────────────── */
+  .toolbar{display:flex; align-items:center; gap:4px;}
+  .toolbar .sep{width:1px; height:22px; background:#cbd5e1; margin:0 8px;}
+  button{
+    font-family:inherit; font-size:12px; padding:6px 10px; border-radius:6px;
+    border:1px solid #cbd5e1; background:#fff; color:#0f172a; cursor:pointer;
+  }
+  button:hover{background:#f1f5f9;}
+  select{
+    font-family:inherit; font-size:12px; padding:6px 8px; border-radius:6px;
+    border:1px solid #cbd5e1; background:#fff; color:#0f172a; width:170px;
+  }
+  .counter{margin-left:auto; font-size:9px; color:var(--counter);}
+  /* ── find bar ──────────────────────────────── */
+  .findbar{
+    display:none; align-items:center; gap:6px; background:var(--find-bg,#eef2ff);
+    border:1px solid #c7d2fe; border-radius:8px; padding:6px 10px; font-size:12px;
+  }
+  .findbar.on{display:flex;}
+  .findbar input{
+    font-family:inherit; font-size:12px; padding:5px 8px;
+    border:1px solid #cbd5e1; border-radius:6px;
+  }
+  .findbar .fstatus{color:var(--muted); font-size:11px; margin-left:6px;}
+  /* ── editor ────────────────────────────────── */
+  .frame{
+    border:1px solid #d8dee9; border-radius:8px; background:#fff;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  .frame>.cap{
+    font-size:11px; color:#334155; padding:4px 10px 2px; font-weight:600;
+  }
+  .editor-row{flex:1; display:flex; min-height:0; padding:4px; gap:0;}
+  #gutter{
+    background:var(--gutter-bg); color:var(--gutter-fg);
+    font-family:Consolas,"Courier New",monospace; font-size:11px;
+    line-height:1.5; padding:8px 6px 8px 10px; text-align:right;
+    overflow:hidden; user-select:none; white-space:pre;
+    border-radius:4px 0 0 4px;
+  }
+  .code-wrap{position:relative; flex:1; overflow:hidden;}
+  #highlight{
+    position:absolute; top:0; left:0; padding:8px 6px; margin:0;
+    font-family:Consolas,"Courier New",monospace; font-size:11px;
+    line-height:1.5; white-space:pre; pointer-events:none;
+    color:var(--editor-fg); min-width:100%; min-height:100%;
+  }
+  #highlight .inline_math{color:var(--math-fg);}
+  #highlight .display_math{color:var(--display-fg);}
+  #highlight .bare_math{color:#fab387; text-decoration:underline;}
+  #highlight .code_block{color:var(--code-fg); background:var(--code-bg);}
+  #highlight .curline{background:var(--line-hl);}
+  #editor{
+    position:absolute; inset:0; width:100%; height:100%;
+    background:transparent; color:transparent; caret-color:#f5f5f5;
+    border:none; outline:none; resize:none; z-index:1;
+    font-family:Consolas,"Courier New",monospace; font-size:11px;
+    line-height:1.5; padding:8px 6px; white-space:pre; overflow:auto;
+  }
+  #editor::selection{background:#45475a; color:transparent;}
+  /* ── options ───────────────────────────────── */
+  .opt-row{display:flex; align-items:center; gap:8px; padding:4px 10px 6px; font-size:12px;}
+  .opt-row label{display:flex; align-items:center; gap:6px;}
+  .opt-row input[type=text]{
+    font-family:inherit; font-size:12px; padding:5px 8px;
+    border:1px solid #cbd5e1; border-radius:6px;
+  }
+  #eqFmt{width:80px;}
+  #output{width:330px;}
+  input:disabled{background:#e2e8f0; color:#94a3b8;}
+  /* ── actions ───────────────────────────────── */
+  .actions{display:flex; align-items:center; gap:12px; padding:2px 4px;}
+  .convert{
+    background:var(--accent); color:#fff; border:none;
+    font-family:"Segoe UI Semibold","Segoe UI",sans-serif; font-size:12px;
+    font-weight:600; padding:11px 18px; border-radius:6px;
+  }
+  .convert:hover{background:var(--accent-hov);}
+  .convert:disabled{opacity:.6; cursor:default;}
+  .progress{
+    width:180px; height:8px; border-radius:6px; background:#e2e8f0;
+    overflow:hidden; display:none;
+  }
+  .progress.on{display:block;}
+  .progress .bar{
+    height:100%; width:40%; border-radius:6px; background:var(--accent);
+    animation:slide 0.8s linear infinite;
+  }
+  @keyframes slide{0%{margin-left:-40%;}100%{margin-left:100%;}}
+  .post{display:none; gap:4px; margin-left:auto;}
+  .post.on{display:flex;}
+  /* ── log & status ──────────────────────────── */
+  .log{
+    height:92px; overflow:auto; background:var(--log-bg); color:#334155;
+    font-family:Consolas,"Courier New",monospace; font-size:9px;
+    padding:6px 8px; border-radius:4px; margin:4px; white-space:pre-wrap;
+  }
+  .statusbar{
+    display:flex; justify-content:space-between; padding:2px 6px;
+    font-size:9px; color:var(--muted);
+  }
+
+  /* ── split pane: editor | live preview ────── */
+  .split{ display:flex; gap:6px; flex:1; min-height:0; }
+  .split .frame{ flex:1; min-width:0; display:flex; flex-direction:column; }
+  .preview{
+    flex:1; overflow:auto; background:#fff; color:#1e293b;
+    font-family:Georgia,"Times New Roman",serif; font-size:11px;
+    padding:8px 12px; border-radius:4px; line-height:1.55; cursor:default;
+  }
+  .preview .pv-h1{ font-size:16px; font-weight:700; margin:10px 0 4px; }
+  .preview .pv-h2{ font-size:14px; font-weight:700; margin:8px 0 3px; }
+  .preview .pv-h3{ font-size:12px; font-weight:700; font-style:italic; margin:6px 0 2px; }
+  .preview .pv-h4{ font-size:11px; font-weight:700; margin:6px 0 2px; }
+  .preview .pv-math{ color:#1d4ed8; }
+  .preview .pv-bare{ color:#c2410c; text-decoration:underline dotted; }
+  .preview .pv-display{
+    color:#1d4ed8; text-align:center; font-size:12.5px;
+    margin:10px 0 2px; white-space:pre-wrap;
+  }
+  .preview .pv-label{ display:block; text-align:right; color:#94a3b8; font-size:10px; }
+  .preview .pv-code{
+    font-family:Consolas,monospace; font-size:9.5px; background:#f1f5f9;
+    color:#475569; padding:1px 4px; border-radius:3px; white-space:pre-wrap;
+  }
+  .preview .pv-quote{ font-style:italic; color:#475569; margin-left:16px; }
+  .preview .pv-table{ color:#334155; font-size:10.5px; white-space:pre-wrap; }
+  .preview .pv-p{ margin:2px 0 10px; }
+  .preview .pv-src{ cursor:pointer; border-radius:2px; }
+  .preview .pv-src:hover{ background:#eef2ff; }
+  .preview .pv-block{ scroll-margin:12px; }
+</style>
+</head>
+<body>
+<div class="banner">
+  ⚠ <strong>UI preview</strong> — faithful, interactive replica of the enhanced Tkinter app
+  (<code>gui/app.py</code>): menus, find/replace, line numbers, status bar, bare-formula
+  detection (peach, underlined), and settings persistence (draft saved in localStorage).
+  Highlighting and counts use the app’s real tokenizer rules. <strong>Conversion is
+  simulated</strong>; the real app runs via <code>python main.py</code> on a desktop.
+</div>
+
+<div class="window" id="win">
+  <!-- ── menu bar ───────────────────────────── -->
+  <div class="menubar">
+    <div class="menu-item" data-menu>
+      <button>File</button>
+      <div class="dropdown">
+        <button onclick="openFile()"><span>Open File…</span><span class="key">Ctrl+O</span></button>
+        <button onclick="browseOutput()"><span>Save Output As…</span><span class="key">Ctrl+S</span></button>
+        <div class="sep"></div>
+        <button onclick="logLine('Exit is disabled in the UI preview.')"><span>Exit</span></button>
+      </div>
+    </div>
+    <div class="menu-item" data-menu>
+      <button>Edit</button>
+      <div class="dropdown">
+        <button onclick="document.execCommand('undo')"><span>Undo</span><span class="key">Ctrl+Z</span></button>
+        <button onclick="document.execCommand('redo')"><span>Redo</span><span class="key">Ctrl+Y</span></button>
+        <div class="sep"></div>
+        <button onclick="document.execCommand('cut')"><span>Cut</span></button>
+        <button onclick="document.execCommand('copy')"><span>Copy</span></button>
+        <button onclick="pasteText()"><span>Paste</span></button>
+        <div class="sep"></div>
+        <button onclick="toggleFind(true)"><span>Find / Replace…</span><span class="key">Ctrl+F</span></button>
+        <button onclick="findNext()"><span>Find Next</span><span class="key">F3</span></button>
+        <button onclick="clearEditor()"><span>Clear Editor</span></button>
+      </div>
+    </div>
+    <div class="menu-item" data-menu>
+      <button>Insert</button>
+      <div class="dropdown" id="insertMenu"></div>
+    </div>
+    <div class="menu-item" data-menu>
+      <button>Help</button>
+      <div class="dropdown">
+        <button onclick="aboutDlg()"><span>About</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── title bar ──────────────────────────── -->
+  <div class="titlebar">
+    <h1>LaTeX → Word Converter</h1>
+    <div class="sub">Native editable OMML equations · v1.1</div>
+  </div>
+
+  <!-- ── toolbar ────────────────────────────── -->
+  <div class="toolbar">
+    <button onclick="openFile()">📂 Open</button>
+    <button onclick="pasteText()">📋 Paste</button>
+    <button onclick="toggleFind()">🔍 Find</button>
+    <button onclick="clearEditor()">🗑 Clear</button>
+    <div class="sep"></div>
+    <select id="tpl" onchange="insertTemplate()">
+      <option value="">Insert Template…</option>
+    </select>
+    <div class="counter" id="counter">0 display equations detected</div>
+    <input type="file" id="fileInput" accept=".md,.tex,.txt" style="display:none">
+  </div>
+
+  <!-- ── find & replace bar ─────────────────── -->
+  <div class="findbar" id="findbar">
+    <span>Find:</span><input id="findText" size="22">
+    <span>Replace:</span><input id="replText" size="16">
+    <button onclick="findNext()">▲</button>
+    <button onclick="findNext(true)">▼</button>
+    <button onclick="replaceCurrent()">Replace</button>
+    <button onclick="replaceAll()">All</button>
+    <span class="fstatus" id="findStatus"></span>
+    <button style="margin-left:auto" onclick="toggleFind(false)">✕</button>
+  </div>
+
+  <!-- ── editor ─────────────────────────────── -->
+  <div class="split">
+    <div class="frame" style="flex:1; min-height:0;">
+      <div class="cap">LaTeX / Markdown Input</div>
+      <div class="editor-row">
+        <div id="gutter">1</div>
+        <div class="code-wrap">
+          <pre id="highlight"></pre>
+          <textarea id="editor" spellcheck="false"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="frame" style="flex:1; min-height:0;">
+      <div class="cap">Live Preview — click a formula to jump to source (F5 refresh)</div>
+      <div class="preview" id="preview"></div>
+    </div>
+  </div>
+
+  <!-- ── options ────────────────────────────── -->
+  <div class="frame">
+    <div class="cap">Conversion Options</div>
+    <div class="opt-row">
+      <label><input type="checkbox" id="autonumber" checked onchange="toggleFmt()"> Auto-number equations</label>
+      <span>Format:</span>
+      <input type="text" id="eqFmt" value="({n})">
+      <label style="margin-left:14px"><input type="checkbox" id="autopen"> Open file after conversion</label>
+    </div>
+    <div class="opt-row">
+      <span>Output file:</span>
+      <input type="text" id="output" placeholder="output.docx">
+      <button onclick="browseOutput()">Browse…</button>
+    </div>
+  </div>
+
+  <!-- ── actions ────────────────────────────── -->
+  <div class="actions">
+    <button class="convert" id="convertBtn" onclick="convert()">⚡&nbsp; Convert &amp; Save&nbsp;&nbsp;(Ctrl+Return)</button>
+    <button onclick="wrapFormula()">📐 Wrap formula</button>
+    <div class="progress" id="progress"><div class="bar"></div></div>
+    <div class="post" id="post">
+      <button onclick="logLine('Open File is unavailable in the UI preview (browser sandbox).')">📄 Open File</button>
+      <button onclick="logLine('Open Folder is unavailable in the UI preview (browser sandbox).')">📁 Open Folder</button>
+    </div>
+  </div>
+
+  <!-- ── log ────────────────────────────────── -->
+  <div class="frame">
+    <div class="cap">Status Log</div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <!-- ── status bar ─────────────────────────── -->
+  <div class="statusbar">
+    <span id="statusLeft">untitled &nbsp;·&nbsp; Ln 1, Col 1 &nbsp;·&nbsp; 0 words, 0 chars</span>
+    <span id="statusRight">0 display · 0 inline</span>
+  </div>
+</div>
+
+<script>
+/* ═══ Port of core/math_tokens.py — same rules as the app ═══ */
+const INLINE_DOLLAR_RE = /(?<![\\$])\$(?!\$)(?!\s)([^$\n]+?)(?<!\s)\$(?![0-9])/g;
+const INLINE_PAREN_RE  = /\\\(([^$\n]+?)\\\)/g;
+
+/* bare (un-delimited) math: strong-signal seeds + bracket-aware expansion */
+const BARE_SEED_RE = /_\{|_[0-9(]|\^\{|\^[0-9(]|(?:\b(?:sum|prod|int|lim|inf|sup|det|max|min|log|exp|ln)_(?:\{|[0-9]|[A-Za-z](?![A-Za-z0-9])))|(?:\b(?:[A-Za-z]|alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega)_(?:\{|\d|[A-Za-z]{1,2}(?![A-Za-z0-9])))|\w+_(?:hat|bar|tilde|dot|ddot|star|prime)(?![A-Za-z])|<=|>=|!=|->/g;
+const BARE_STOP = new Set(`a an the and or but nor so yet as at by to for with from on about into over after before between out up down not no yes can will just also than too very here there such each both all any some more most other only own same is are was were be been being am it its this that these those then thus hence so which who whom whose where when while why how if else do does did done have has had let we you they he she i our your their of off example examples etc vs versus per among during without within upon above below under again further once twice because since until unless therefore whereas respectively given suppose assume note recall define defined defines means denote denotes denoting get got make makes made use used using value values variable variables function functions equation equations formula formulas term terms set sets word words left right where plus minus equals equal divided multiply times result results code text data input output see show shows shown give gives yield yields follow follows produce produces`.split(/\s+/));
+const BARE_GREEK = `alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi pi rho sigma tau upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega`.split(/\s+/);
+const BARE_ALLOWED = new Set(`in notin subset subseteq supset supseteq approx equiv neq to implies iff cdot times div sum prod int lim inf sup det max min log ln exp arg deg hat bar tilde dot dddot star prime`.split(/\s+/).concat(BARE_GREEK));
+const _EDGE_TOKEN_RE = /[A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?/;
+const _EDGE_KEEP_OPS = /<=|>=|!=|->|[=<>+*|]/;
+
+function _trimProseEdges(span){
+  function keep(tokStart, tokEnd, side){
+    const tok = span.slice(tokStart, tokEnd);
+    const m = tok.match(_EDGE_TOKEN_RE);
+    const base = m ? m[0].split("_")[0].split("^")[0] : tok;
+    const hasSub = !!m && m[0] !== base;
+    if (hasSub || BARE_ALLOWED.has(base) || base.length === 1) return true;
+    if (/^\d+$/.test(base)) return true;
+    if (side === "left"){
+      if (_EDGE_KEEP_OPS.test(span.slice(tokEnd, tokEnd+8).replace(/^\s+/, ""))) return true;
+    } else {
+      if (_EDGE_KEEP_OPS.test(span.slice(0, tokStart).slice(-6))) return true;
+    }
+    return false;
+  }
+  while (span){
+    let m = span.match(/^([A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?)\s+/);
+    if (m && !keep(0, m[1].length, "left")){ span = span.slice(m[0].length); continue; }
+    m = span.match(/\s+([A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?)$/);
+    if (m && !keep(m.index + 1, m.index + 1 + m[1].length, "right")){
+      span = span.slice(0, m.index).trimEnd();
+      continue;
+    }
+    return span;
+  }
+  return span;
+}
+
+function findBareSpans(text){
+  const out = [];
+  const n = text.length;
+  for (const m of text.matchAll(BARE_SEED_RE)){
+    let s = m.index, e = m.index + m[0].length;
+    if (out.some(([ts,te]) => s >= ts && e <= te)) continue;
+    /* seed may end with an opener ("_{") — keep its depth in the walk */
+    const seed = text.slice(s, e);
+    const openC = t => (t.match(/[[({]/g) || []).length;
+    const closeC = t => (t.match(/[\])}]/g) || []).length;
+    /* expand left */
+    let depth = Math.max(0, closeC(seed) - openC(seed));
+    let i = s;
+    while (i > 0){
+      const ch = text[i-1];
+      if (ch === "]" || ch === ")" || ch === "}") depth++;
+      else if (ch === "[" || ch === "(" || ch === "{"){
+        if (depth === 0) break;
+        depth--;
+      }
+      if (depth === 0){
+        if (ch === ";" || ch === ",") break;
+        if (ch === "."){
+          /* sentence period = glued left + space right; stray " . " continues */
+          const glued = (i-1 > 0 && text[i-2] !== " " && text[i-2] !== "\t");
+          const followed = i < n ? text[i] : " ";
+          if (glued && (followed === " " || followed === "\t")) break;
+        }
+        if (ch === "$") break;
+      }
+      if ((ch === " " || ch === "\n") && depth === 0){
+        let j = i-1;
+        while (j > 0 && /[A-Za-z_]/.test(text[j-1])) j--;
+        const w = text.slice(j, i-1).toLowerCase();
+        if (w && BARE_STOP.has(w)) break;
+      }
+      i--;
+    }
+    s = i;
+    /* expand right */
+    depth = Math.max(0, openC(text.slice(s, e)) - closeC(text.slice(s, e)));
+    let j = e;
+    while (j < n){
+      const ch = text[j];
+      if (ch === "[" || ch === "(" || ch === "{") depth++;
+      else if (ch === "]" || ch === ")" || ch === "}"){
+        if (depth === 0) break;
+        depth--;
+      }
+      if (depth === 0){
+        if (ch === ";" || ch === ",") break;
+        if (ch === "."){
+          const glued = (j > 0 && text[j-1] !== " " && text[j-1] !== "\t");
+          const followed = j+1 < n ? text[j+1] : " ";
+          if (glued && (followed === " " || followed === "\t")) break;
+        }
+        if (ch === "$") break;
+      }
+      if ((ch === " " || ch === "\n") && depth === 0){
+        let k = j+1;
+        while (k < n && /[A-Za-z_]/.test(text[k])) k++;
+        const w = text.slice(j+1, k).toLowerCase();
+        if (w && BARE_STOP.has(w)) break;
+      }
+      j++;
+    }
+    e = j;
+    let span = text.slice(s, e).trim().replace(/^[\s.,;:]+|[\s.,;:]+$/g, "");
+    for (const wd of ["in","and","or","for","with","of","to","on","at","by","is","are","as","but"]){
+      if (span.toLowerCase().endsWith(" " + wd)) span = span.slice(0, -(wd.length+1)).trimEnd();
+      if (span.toLowerCase().startsWith(wd + " ")) span = span.slice(wd.length+1).trimStart();
+    }
+    span = _trimProseEdges(span);
+    if (!span || !BARE_SEED_RE.test(span)) continue;
+    BARE_SEED_RE.lastIndex = 0;
+    const rel = text.slice(s, e).indexOf(span);
+    if (rel === -1) continue;
+    out.push([s + rel, s + rel + span.length]);
+  }
+  out.sort((a,b) => a[0]-b[0]);
+  /* merge overlaps */
+  const merged = [];
+  for (const [s, e] of out){
+    if (merged.length && s < merged[merged.length-1][1])
+      merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], e);
+    else merged.push([s, e]);
+  }
+  return merged;
+}
+
+const TEMPLATES = {
+  "Fraction": "$$\\frac{a}{b}$$",
+  "Summation": "$$\\sum_{i=1}^{n} x_i$$",
+  "Integral": "$$\\int_{a}^{b} f(x)\\, dx$$",
+  "Matrix (2×2)": "$$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$$",
+  "Square root": "$$\\sqrt{a^2 + b^2}$$",
+  "Greek inline": "$\\alpha, \\beta, \\gamma, \\theta$",
+  "Superscript / subscript": "$x_{i}^{2} + y_{j}^{3}$",
+};
+
+const $ = id => document.getElementById(id);
+const editor = $("editor"), highlight = $("highlight"), gutter = $("gutter");
+
+/* templates: toolbar select + Insert menu */
+for (const name of Object.keys(TEMPLATES)) {
+  const o = document.createElement("option");
+  o.value = name; o.textContent = name;
+  $("tpl").appendChild(o);
+  const b = document.createElement("button");
+  b.innerHTML = `<span>${name}</span>`;
+  b.onclick = () => insertTemplateByName(name);
+  $("insertMenu").appendChild(b);
+}
+
+/* menu open/close */
+document.querySelectorAll("[data-menu]>button").forEach(btn => {
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    const item = btn.parentElement, was = item.classList.contains("open");
+    document.querySelectorAll("[data-menu]").forEach(m => m.classList.remove("open"));
+    if (!was) item.classList.add("open");
+  });
+});
+document.addEventListener("click", () =>
+  document.querySelectorAll("[data-menu]").forEach(m => m.classList.remove("open")));
+
+function isFenceLine(line){ return /^\s*(`{3,}|~{3,})/.test(line); }
+
+function fenceSet(lines){
+  const set = new Set(); let inF = false, openCh = "";
+  for (let i = 0; i < lines.length; i++){
+    const m = lines[i].match(/^\s*(`{3,}|~{3,})/);
+    if (m){
+      const ch = m[1][0];
+      if (!inF){ inF = true; openCh = ch; set.add(i); }
+      else if (ch === openCh){ inF = false; set.add(i); }
+      continue;
+    }
+    if (inF) set.add(i);
+  }
+  return set;
+}
+
+function countDisplay(text){
+  const lines = text.split("\n"), fence = fenceSet(lines);
+  const kept = lines.filter((_, i) => !fence.has(i));
+  let n = 0, inBlock = false;
+  for (const ln of kept){
+    const s = ln.trim();
+    if (!inBlock && s.startsWith("$$")){
+      const rest = s.slice(2).trim();
+      if (rest.endsWith("$$") && rest.length >= 2){ if (rest.slice(0,-2).trim()) n++; }
+      else inBlock = true;
+    } else if (inBlock && s.endsWith("$$")){ inBlock = false; n++; }
+    if (s.startsWith("\\[") && s.endsWith("\\]") && s.length > 3) n++;
+  }
+  return n;
+}
+
+function countInline(lines, fence){
+  let n = 0;
+  for (let i = 0; i < lines.length; i++){
+    if (fence.has(i)) continue;
+    for (const re of [INLINE_DOLLAR_RE, INLINE_PAREN_RE]){
+      re.lastIndex = 0;
+      for (const _ of lines[i].matchAll(re)) n++;
+    }
+    n += findBareSpans(lines[i]).length;
+  }
+  return n;
+}
+
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function render(){
+  const text = editor.value;
+  const lines = text.split("\n");
+  const fence = fenceSet(lines);
+  const spans = [];
+
+  let off = 0;
+  for (let i = 0; i < lines.length; i++){
+    const ln = lines[i];
+    if (fence.has(i)) spans.push({start:off, end:off+ln.length, cls:"code_block"});
+    else {
+      const s = ln.trim();
+      if (s.startsWith("$$")){
+        const rest = s.slice(2).trim();
+        if (!(rest.endsWith("$$") && rest.length >= 2)) {
+          let j = i+1;
+          while (j < lines.length && !lines[j].trim().endsWith("$$")) j++;
+          if (j < lines.length){
+            let endOff = off;
+            for (let k = i; k <= j; k++) endOff += lines[k].length + (k<j?1:0);
+            spans.push({start:off, end:endOff, cls:"display_math"});
+          }
+        } else if (rest.slice(0,-2).trim()){
+          spans.push({start:off, end:off+ln.length, cls:"display_math"});
+        }
+      } else if (s.startsWith("\\[") && s.endsWith("\\]") && s.length > 3){
+        spans.push({start:off, end:off+ln.length, cls:"display_math"});
+      }
+      for (const re of [INLINE_DOLLAR_RE, INLINE_PAREN_RE]){
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(ln)) !== null){
+          spans.push({start:off+m.index, end:off+m.index+m[0].length, cls:"inline_math"});
+        }
+      }
+      /* bare un-delimited formulas (peach/underlined) */
+      for (const [bs, be] of findBareSpans(ln)){
+        spans.push({start:off+bs, end:off+be, cls:"bare_math"});
+      }
+    }
+    off += ln.length + 1;
+  }
+
+  /* current-line band */
+  const caret = editor.selectionStart;
+  const curLineStart = text.lastIndexOf("\n", caret - 1) + 1;
+  let curLineEnd = text.indexOf("\n", caret);
+  if (curLineEnd === -1) curLineEnd = text.length;
+  spans.push({start:curLineStart, end:curLineEnd, cls:"curline"});
+
+  spans.sort((a,b) => a.start - b.start || (a.cls==="curline" ? -1 : 1));
+  let html = "", pos = 0;
+  for (const sp of spans){
+    if (sp.start < pos) continue;
+    html += esc(text.slice(pos, sp.start));
+    html += `<span class="${sp.cls}">` + esc(text.slice(sp.start, sp.end)) + "</span>";
+    pos = sp.end;
+  }
+  html += esc(text.slice(pos));
+  highlight.innerHTML = html;
+
+  /* gutter */
+  gutter.textContent = lines.map((_, i) => i + 1).join("\n");
+
+  /* counters + status */
+  const d = countDisplay(text);
+  $("counter").textContent = `${d} display equation${d !== 1 ? "s" : ""} detected`;
+  $("statusRight").textContent = `${d} display · ${countInline(lines, fence)} inline`;
+
+  const upTo = text.slice(0, caret);
+  const row = (upTo.match(/\n/g) || []).length + 1;
+  const col = caret - (upTo.lastIndexOf("\n") + 1) + 1;
+  const words = (text.trim().match(/\S+/g) || []).length;
+  $("statusLeft").innerHTML =
+    `untitled &nbsp;·&nbsp; Ln ${row}, Col ${col} &nbsp;·&nbsp; ${words} words, ${text.trim().length} chars`;
+
+  saveDraft();
+  schedulePreview();
+}
+
+function syncScroll(){
+  highlight.style.transform =
+    `translate(${-editor.scrollLeft}px, ${-editor.scrollTop}px)`;
+  gutter.scrollTop = editor.scrollTop;
+  syncPreviewToEditor();
+}
+
+/* ── toolbar actions (mirror gui/app.py) ─────── */
+function insertTemplateByName(name){
+  const tpl = TEMPLATES[name];
+  if (!tpl) return;
+  const p = editor.selectionStart;
+  editor.value = editor.value.slice(0,p) + "\n" + tpl + "\n" + editor.value.slice(p);
+  editor.focus();
+  render();
+}
+function insertTemplate(){
+  const name = $("tpl").value;
+  if (name) insertTemplateByName(name);
+  $("tpl").value = "";
+}
+function clearEditor(){ editor.value = ""; render(); }
+function pasteText(){
+  navigator.clipboard.readText().then(t => {
+    const p = editor.selectionStart;
+    editor.value = editor.value.slice(0,p) + t + editor.value.slice(p);
+    render();
+  }).catch(() => logLine("Clipboard access denied by browser — use Ctrl+V in the editor."));
+}
+function openFile(){ $("fileInput").click(); }
+$("fileInput").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  f.text().then(t => {
+    editor.value = t;
+    $("output").value = f.name.replace(/\.(md|tex|txt)$/, "") + ".docx";
+    render();
+    logLine(`Loaded: ${f.name}`);
+  });
+});
+function browseOutput(){
+  const n = prompt("Save Word Document (name only — UI preview):", $("output").value || "output.docx");
+  if (n) $("output").value = n;
+}
+function toggleFmt(){ $("eqFmt").disabled = !$("autonumber").checked; }
+function aboutDlg(){
+  alert("LaTeX → Word Converter\nVersion 1.1\n\nMarkdown/LaTeX → Word with native OMML equations,\nautomatic numbering, and Word VBA automation.\n\nMath detection: Pandoc dollar-math rules\n(currency, $ escapes and code fences are safe).");
+}
+
+/* ── find & replace ────────────────────────── */
+function toggleFind(show){
+  const bar = $("findbar");
+  const on = show === undefined ? !bar.classList.contains("on") : show;
+  bar.classList.toggle("on", on);
+  if (on){
+    const sel = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+    if (sel && !sel.includes("\n")) $("findText").value = sel;
+    $("findText").focus();
+    $("findText").select();
+  } else {
+    $("findStatus").textContent = "";
+    editor.focus();
+  }
+}
+function findNext(backwards){
+  const needle = $("findText").value;
+  if (!needle) return;
+  const hay = editor.value.toLowerCase(), n = needle.toLowerCase();
+  let pos;
+  if (backwards){
+    pos = hay.lastIndexOf(n, Math.max(0, editor.selectionStart - 1));
+    if (pos === -1) pos = hay.lastIndexOf(n);
+  } else {
+    pos = hay.indexOf(n, editor.selectionEnd);
+    if (pos === -1) pos = hay.indexOf(n);
+  }
+  if (pos === -1){ $("findStatus").textContent = "no matches"; return; }
+  editor.setSelectionRange(pos, pos + needle.length);
+  $("findStatus").textContent = "match found";
+  render();
+}
+function replaceCurrent(){
+  const needle = $("findText").value;
+  if (!needle) return;
+  const sel = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+  if (sel.toLowerCase() === needle.toLowerCase() && sel){
+    const p = editor.selectionStart;
+    editor.value = editor.value.slice(0,p) + $("replText").value + editor.value.slice(editor.selectionEnd);
+    render();
+  }
+  findNext();
+}
+function replaceAll(){
+  const needle = $("findText").value;
+  if (!needle) return;
+  const re = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  const n = (editor.value.match(re) || []).length;
+  editor.value = editor.value.replace(re, $("replText").value);
+  render();
+  $("findStatus").textContent = `replaced ${n} occurrence${n !== 1 ? "s" : ""}`;
+}
+
+/* ═══ Live preview pane — mirror of gui/preview_render.py ═══ */
+const _GREEK = {alpha:"α",beta:"β",gamma:"γ",delta:"δ",epsilon:"ε",varepsilon:"ϵ",zeta:"ζ",eta:"η",theta:"θ",vartheta:"ϑ",iota:"ι",kappa:"κ",lambda:"λ",mu:"μ",nu:"ν",xi:"ξ",pi:"π",rho:"ρ",sigma:"σ",tau:"τ",upsilon:"υ",phi:"φ",varphi:"ϕ",chi:"χ",psi:"ψ",omega:"ω",Gamma:"Γ",Delta:"Δ",Theta:"Θ",Lambda:"Λ",Xi:"Ξ",Pi:"Π",Sigma:"Σ",Upsilon:"Υ",Phi:"Φ",Psi:"Ψ",Omega:"Ω"};
+const _SYMBOLS = {infty:"∞",in:"∈",notin:"∉",subset:"⊂",subseteq:"⊆",supset:"⊃",supseteq:"⊇",leq:"≤",geq:"≥",neq:"≠",le:"≤",ge:"≥",ne:"≠",lt:"<",gt:">",approx:"≈",equiv:"≡",cdot:"·",times:"×",div:"÷",pm:"±",mp:"∓",mid:"∣",to:"→",rightarrow:"→",leftarrow:"←",Rightarrow:"⇒",ldots:"…",cdots:"⋯",dots:"…",sum:"Σ",prod:"∏",int:"∫",oint:"∮",partial:"∂",nabla:"∇",forall:"∀",exists:"∃",neg:"¬",wedge:"∧",vee:"∨",cup:"∪",cap:"∩",emptyset:"∅",prime:"′",star:"⋆"};
+const _SUB_MAP = {"0":"₀","1":"₁","2":"₂","3":"₃","4":"₄","5":"₅","6":"₆","7":"₇","8":"₈","9":"₉","+":"₊","-":"₋","=":"₌","(":"₍",")":"₎","a":"ₐ","e":"ₑ","h":"ₕ","i":"ᵢ","j":"ⱼ","k":"ₖ","l":"ₗ","m":"ₘ","n":"ₙ","o":"ₒ","p":"ₚ","r":"ᵣ","s":"ₛ","t":"ₜ","u":"ᵤ","v":"ᵥ","x":"ₓ"};
+const _SUP_MAP = {"0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹","+":"⁺","-":"⁻","=":"⁼","(":"⁽",")":"⁾","n":"ⁿ","i":"ⁱ"," ":"·","x":"ˣ","a":"ᵃ","b":"ᵇ","d":"ᵈ","e":"ᵉ","h":"ʰ","j":"ʲ","k":"ᵏ","l":"ˡ","m":"ᵐ","o":"ᵒ","p":"ᵖ","r":"ʳ","s":"ˢ","t":"ᵗ","u":"ᵘ","v":"ᵛ","w":"ʷ"};
+const _ACCENTS = [["hat","\u0302"],["bar","\u0304"],["tilde","\u0303"],["vec","\u20d7"],["dot","\u0307"],["ddot","\u0308"],["prime","′"]];
+const _BB = {R:"ℝ",N:"ℕ",Z:"ℤ",Q:"ℚ",C:"ℂ",P:"ℙ",H:"ℍ"};
+
+function _mapOrRaw(content, map, open, close){
+  const ok = [...content].every(c => c.trim()==="" || c.charCodeAt(0) > 127 || map[c] !== undefined);
+  if (!ok) return content.length !== 1 ? open+"{"+content+"}" : open+content;
+  return [...content].map(c => map[c] !== undefined ? map[c] : c).join("");
+}
+function latexToPretty(latex){
+  let s = latex.trim();
+  s = s.replace(/\\left/g,"").replace(/\\right/g,"");
+  s = s.replace(/\\!/g,"").replace(/\\,/g," ").replace(/\\;/g," ");
+  s = s.replace(/\\\{/g,"\x01").replace(/\\\}/g,"\x02");
+  s = s.replace(/\\qquad/g,"\x04").replace(/\\quad/g,"\x03");
+  s = s.replace(/\\sqrt\[([^\]]*)\]\{([^{}]*)\}/g, "$2^(1/$1)");
+  for (let i=0;i<8;i++){ const n = s.replace(/\\sqrt\{([^{}]*)\}/g, "√($1)"); if (n===s) break; s=n; }
+  for (let i=0;i<8;i++){ const n = s.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "($1)/($2)"); if (n===s) break; s=n; }
+  for (const [name, mark] of _ACCENTS)
+    for (let i=0;i<6;i++){ const n = s.replace(new RegExp("\\\\"+name+"\\{([^{}]*)\\}","g"), (_m,c)=>c+mark); if (n===s) break; s=n; }
+  s = s.replace(/\\mathbb\{([^{}]*)\}/g, (_m,c)=>[...c].map(ch=>_BB[ch]||ch).join(""));
+  s = s.replace(/\\(?:mathrm|text|operatorname|mathbf|mathit)\{([^{}]*)\}/g, "$1");
+  for (const w of Object.keys(_GREEK).sort((a,b)=>b.length-a.length))
+    s = s.replace(new RegExp("\\\\"+w+"(?![a-zA-Z])","g"), _GREEK[w]);
+  for (const w of Object.keys(_SYMBOLS).sort((a,b)=>b.length-a.length))
+    s = s.replace(new RegExp("\\\\"+w+"(?![a-zA-Z])","g"), _SYMBOLS[w]);
+  s = s.replace(/\\[a-zA-Z]+/g, "");
+  for (let i=0;i<8;i++){
+    let n = s.replace(/_\{([^{}]*)\}/g, (_m,c)=>_mapOrRaw(c,_SUB_MAP,"_",""));
+    n = n.replace(/\^\{([^{}]*)\}/g, (_m,c)=>_mapOrRaw(c,_SUP_MAP,"^",""));
+    if (n===s) break; s=n;
+  }
+  s = s.replace(/_([A-Za-z0-9])/g, (_m,c)=>_mapOrRaw(c,_SUB_MAP,"_",""));
+  s = s.replace(/\^([A-Za-z0-9])/g, (_m,c)=>_mapOrRaw(c,_SUP_MAP,"^",""));
+  s = s.replace(/\x01/g,"{").replace(/\x02/g,"}");
+  s = s.replace(/\s+/g," ").trim();
+  s = s.replace(/ *\x04 */g,"     ").replace(/ *\x03 */g,"   ");
+  return s;
+}
+
+const _PV_PREVIEW = $("preview");
+let _pvBlocks = [];          // {line, el}
+function pvEsc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function pvSrcTag(line, c0, c1, text, cls){
+  return `<span class="pv-src ${cls}" data-line="${line}" data-c0="${c0}" data-c1="${c1}">${text}</span>`;
+}
+
+function pvRuns(lineText, lineNo){
+  /* mirror runs_for_line: text | math | bare | code, with click spans */
+  const spans = [];
+  for (const m of lineText.matchAll(/`([^`]+)`/g)) spans.push([m.index, m.index+m[0].length, "code"]);
+  for (const re of [INLINE_DOLLAR_RE, INLINE_PAREN_RE]){
+    re.lastIndex = 0;
+    for (const m of lineText.matchAll(re)) spans.push([m.index, m.index+m[0].length, "math"]);
+  }
+  for (const [s,e] of findBareSpans(lineText)) spans.push([s, e, "bare"]);
+  spans.sort((a,b)=>a[0]-b[0]);
+  let out = "", pos = 0;
+  for (const [s,e,kind] of spans){
+    if (s < pos) continue;
+    if (s > pos) out += pvEsc(lineText.slice(pos, s));
+    let raw = lineText.slice(s,e);
+    let pretty;
+    if (kind === "math"){
+      if (raw.startsWith("$$") && raw.endsWith("$$")) raw = raw.slice(2,-2);
+      else if (raw.startsWith("$") && raw.endsWith("$")) raw = raw.slice(1,-1);
+      else if (raw.startsWith("\\(") && raw.endsWith("\\)")) raw = raw.slice(2,-2);
+      pretty = latexToPretty(raw);
+    } else if (kind === "code"){
+      pretty = pvEsc(raw.slice(1,-1));
+    } else {
+      pretty = latexToPretty(raw);
+    }
+    out += pvSrcTag(lineNo, s, e, pvEsc(pretty),
+                    kind === "math" ? "pv-math" : kind === "code" ? "pv-code" : "pv-bare");
+    pos = e;
+  }
+  if (pos < lineText.length) out += pvEsc(lineText.slice(pos));
+  return out || pvEsc(lineText);
+}
+
+function pvCellRuns(cell){ return pvRuns(cell.trim(), -1); }
+
+function renderPreview(){
+  const text = editor.value;
+  const lines = text.split("\n");
+  const disp = new Set();
+  { /* display-math line set — same rules as countDisplay */
+    const fence = fenceSet(lines);
+    let inB = false;
+    for (let i=0;i<lines.length;i++){
+      if (fence.has(i)) continue;
+      const s = lines[i].trim();
+      if (!inB && s.startsWith("$$")){
+        const rest = s.slice(2).trim();
+        if (rest.endsWith("$$") && rest.length >= 2){ if (rest.slice(0,-2).trim()) disp.add(i); }
+        else { inB = true; disp.add(i); }
+      } else if (inB && s.endsWith("$$")){ inB = false; disp.add(i); }
+      else if (inB){ disp.add(i); }
+    }
+  }
+  const fence = fenceSet(lines);
+  const html = [];
+  _pvBlocks = [];
+  let eqNo = 0, i = 0;
+  const fmt = $("eqFmt").value || "({n})";
+  const numbered = $("autonumber").checked;
+
+  while (i < lines.length){
+    const line = lines[i], s = line.trim();
+    const push = (inner) => {
+      html.push(`<div class="pv-block" data-line="${i+1}">${inner}</div>`);
+      _pvBlocks.push({line: i+1, el: null});
+    };
+    if (fence.has(i)){
+      let j = i;
+      while (j + 1 < lines.length && fence.has(j + 1)) j++;
+      push(`<span class="pv-code">${lines.slice(i, j + 1).map(pvEsc).join("\n")}</span>`);
+      i = j + 1;
+      continue;
+    }
+    if (s.startsWith("\\[") && s.endsWith("\\]") && s.length > 3){
+      eqNo++;
+      const raw = s.slice(2,-2).trim();
+      push(`<div class="pv-display">${pvEsc(latexToPretty(raw))}</div>` +
+           (numbered ? `<span class="pv-label">${pvEsc(fmt.replace("{n}", eqNo))}</span>` : ""));
+      i += 1;
+      continue;
+    }
+    if (disp.has(i)){
+      let j = i;
+      while (j+1 < lines.length && disp.has(j+1)) j++;
+      const raw = lines.slice(i,j+1).map(l=>l.trim().replace(/^\$\$|\$\$$/g,"").trim()).filter(Boolean).join(" ");
+      eqNo++;
+      push(`<div class="pv-display">${pvEsc(latexToPretty(raw))}</div>` +
+           (numbered ? `<span class="pv-label">${pvEsc(fmt.replace("{n}", eqNo))}</span>` : ""));
+      i = j + 1;
+      continue;
+    }
+    if (!s){ i += 1; continue; }
+    const h = s.match(/^(#{1,4})\s+(.*)$/);
+    if (h){ push(`<span class="pv-h${h[1].length}">${pvRuns(h[2], i+1)}</span>`); i += 1; continue; }
+    if (/^-{3,}$/.test(s)){ i += 1; continue; }
+    if (s.startsWith("|") && s.endsWith("|")){
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")){
+        const t = lines[i].trim();
+        if (!/^\|[\s:|-]+\|$/.test(t))
+          rows.push(t.slice(1,-1).split("|").map(c => pvCellRuns(c)).join(" │ "));
+        i++;
+      }
+      push(`<div class="pv-table">${rows.join("\n")}</div>`);
+      continue;
+    }
+    if (s.startsWith("> ")){
+      push(`<div class="pv-quote">${pvRuns(s.slice(2), i+1)}</div>`); i += 1; continue;
+    }
+    if (/^([-*+]|\d+[.)])\s/.test(s)){
+      push(`<div class="pv-p">• ${pvRuns(s.replace(/^([-*+]|\d+[.)])\s/, ""), i+1)}</div>`);
+      i += 1; continue;
+    }
+    /* paragraph */
+    const para = [pvRuns(line.replace(/^\s*[-*+]\s*/, ""), i+1)];
+    while (i+1 < lines.length){
+      const n = lines[i+1].trim();
+      if (!n || n.startsWith("#") || n.startsWith("|") || n.startsWith("> ") ||
+          n.startsWith("$$") || disp.has(i+1) || fence.has(i+1) ||
+          /^([-*+]|\d+[.)])\s/.test(n)) break;
+      i++;
+      para.push(pvRuns(lines[i], i+1));
+    }
+    push(`<div class="pv-p">${para.join(" ")}</div>`);
+    i += 1;
+  }
+  _PV_PREVIEW.innerHTML = html.join("\n");
+  _pvBlocks = [..._PV_PREVIEW.querySelectorAll(".pv-block")].map((el, k) => ({
+    line: parseInt(el.dataset.line, 10), el
+  }));
+  syncPreviewToEditor();
+}
+
+function syncPreviewToEditor(){
+  /* scroll preview to the block nearest the editor's first visible line */
+  if (!_pvBlocks.length) return;
+  const style = getComputedStyle(editor);
+  const lh = parseFloat(style.lineHeight) || 16;
+  const topLine = Math.floor(editor.scrollTop / lh) + 1;
+  let target = _pvBlocks[0];
+  for (const b of _pvBlocks){ if (b.line <= topLine) target = b; else break; }
+  if (target && target.el) _PV_PREVIEW.scrollTop = target.el.offsetTop - 12;
+}
+
+_PV_PREVIEW.addEventListener("click", e => {
+  const t = e.target.closest(".pv-src");
+  if (!t || t.dataset.line === "-1") return;
+  const line = parseInt(t.dataset.line, 10), c0 = +t.dataset.c0, c1 = +t.dataset.c1;
+  const lines = editor.value.split("\n");
+  let off = 0;
+  for (let k = 0; k < line-1; k++) off += lines[k].length + 1;
+  editor.focus();
+  editor.setSelectionRange(off + c0, off + c1);
+  const lh = parseFloat(getComputedStyle(editor).lineHeight) || 16;
+  editor.scrollTop = Math.max(0, (line - 3) * lh);
+  syncScroll();
+  render();
+});
+
+function wrapFormula(){
+  const a = editor.selectionStart, b = editor.selectionEnd;
+  if (a === b){ logLine("Select a formula first, then press Ctrl+M"); return; }
+  const sel = editor.value.slice(a, b);
+  let wrapped;
+  if (sel.trim().startsWith("$")) wrapped = sel;
+  else if (sel.trim().includes("\n")) wrapped = "$$\n" + sel.trim() + "\n$$";
+  else wrapped = "$" + sel.trim() + "$";
+  editor.value = editor.value.slice(0,a) + wrapped + editor.value.slice(b);
+  editor.setSelectionRange(a, a + wrapped.length);
+  render();
+  logLine("Formula wrapped — preview updated");
+}
+
+let _pvJob = null;
+function schedulePreview(){
+  if (_pvJob) clearTimeout(_pvJob);
+  _pvJob = setTimeout(() => { _pvJob = null; renderPreview(); }, 120);
+}
+
+/* ── log (same message shapes as _poll_queue) ── */
+function logLine(msg){
+  const log = $("log");
+  log.textContent += msg + "\n";
+  log.scrollTop = log.scrollHeight;
+}
+
+/* ── simulated conversion ────────────────────── */
+function convert(){
+  const content = editor.value.trim();
+  if (!content){ alert("Empty Input\n\nPlease enter or open some LaTeX/Markdown content."); return; }
+  if (!$("output").value.trim()){
+    const n = prompt("Save Word Document (name only — UI preview):", "output.docx");
+    if (!n) return;
+    $("output").value = n;
+  }
+  if (!$("output").value.toLowerCase().endsWith(".docx"))
+    $("output").value += ".docx";
+
+  $("convertBtn").disabled = true;
+  $("progress").classList.add("on");
+  $("post").classList.remove("on");
+  logLine("Converting…");
+
+  setTimeout(() => {
+    $("progress").classList.remove("on");
+    $("convertBtn").disabled = false;
+    const lines = content.split("\n"), fence = fenceSet(lines);
+    const d = countDisplay(content), i = countInline(lines, fence);
+    logLine(`✅ Success! ${d+i}/${d+i} equations converted. Saved to: ${$("output").value}`);
+    logLine("   (UI preview — conversion is simulated; no .docx written in the browser)");
+    $("post").classList.add("on");
+    if ($("autopen").checked)
+      logLine("Auto-open skipped in the UI preview.");
+  }, 1400);
+}
+
+/* ── settings persistence (localStorage ≙ ~/.latex-to-word-converter.json) */
+function saveDraft(){
+  try{
+    localStorage.setItem("lwx-draft", editor.value);
+    localStorage.setItem("lwx-opts", JSON.stringify({
+      autonumber: $("autonumber").checked,
+      eqFormat: $("eqFmt").value,
+      autopen: $("autopen").checked,
+      output: $("output").value,
+    }));
+  }catch(e){}
+}
+function restoreDraft(){
+  try{
+    const draft = localStorage.getItem("lwx-draft");
+    if (draft) editor.value = draft;
+    const opts = JSON.parse(localStorage.getItem("lwx-opts") || "{}");
+    if (typeof opts.autonumber === "boolean") $("autonumber").checked = opts.autonumber;
+    if (opts.eqFormat) $("eqFmt").value = opts.eqFormat;
+    if (typeof opts.autopen === "boolean") $("autopen").checked = opts.autopen;
+    if (opts.output) $("output").value = opts.output;
+  }catch(e){}
+}
+
+/* ── events ─────────────────────────────────── */
+editor.addEventListener("input", render);
+editor.addEventListener("click", render);
+editor.addEventListener("keyup", render);
+editor.addEventListener("scroll", syncScroll);
+["eqFmt","output"].forEach(id => $(id).addEventListener("input", saveDraft));
+
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey && e.key === "f"){ e.preventDefault(); toggleFind(true); }
+  else if (e.key === "F3"){ e.preventDefault(); findNext(e.shiftKey); }
+  else if (e.ctrlKey && e.key === "Enter"){ e.preventDefault(); convert(); }
+  else if (e.ctrlKey && e.key.toLowerCase() === "m"){ e.preventDefault(); wrapFormula(); }
+  else if (e.key === "F5"){ e.preventDefault(); renderPreview(); }
+  else if (e.ctrlKey && e.key.toLowerCase() === "o"){ e.preventDefault(); openFile(); }
+  else if (e.ctrlKey && e.key.toLowerCase() === "s"){ e.preventDefault(); browseOutput(); }
+  else if (e.key === "Escape"){ toggleFind(false); }
+});
+$("findText").addEventListener("keydown", e => {
+  if (e.key === "Enter"){ e.preventDefault(); findNext(); }
+  if (e.key === "Escape") toggleFind(false);
+});
+$("replText").addEventListener("keydown", e => {
+  if (e.key === "Enter"){ e.preventDefault(); replaceCurrent(); }
+  if (e.key === "Escape") toggleFind(false);
+});
+
+/* boot — same welcome lines as the app */
+logLine("Ready. Paste or open a LaTeX/Markdown file to begin.");
+logLine("OMML stylesheet loaded: core/MML2OMML.XSL");
+restoreDraft();
+if (!editor.value){
+  editor.value = [
+    "# Sample Document",
+    "",
+    "Let $\\alpha, \\beta \\in \\mathbb{R}$ and $E = mc^2$.",
+    "",
+    "$$",
+    "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+    "$$",
+    "",
+    "Bare formulas (no delimiters) are recognized too:",
+    "f_1 in {0.05, 0.15, 0.35}; f_2 in {0.10, 0.25, 0.50},",
+    "E_2[ N_hat * theta_hat_DML | s_1 ] = sum_{k in s_1} w_1k Y_k + o_p(N n^(-1/2)).",
+    "",
+    "Price stays prose: $5.00 and $10.00 — and so does max_size.",
+    "",
+    "```",
+    "$$not math inside fences$$",
+    "```",
+    "",
+    "| Col | Formula |",
+    "|---|---|",
+    "| abs | $|x|$ |",
+  ].join("\n");
+}
+render();
+syncScroll();
+</script>
+</body>
+</html>

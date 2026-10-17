@@ -30,13 +30,34 @@ Most Markdown-to-Word tools (like default Pandoc setups) rasterize LaTeX equatio
 ## ✨ Key Features
 
 - **Native OMML Generation**: Translates inline (`$...$`) and display (`$$...$$`) math into genuine `<m:oMath>` and `<m:oMathPara>` XML elements inside the OpenXML document tree.
+- **Bare Formula Detection**: Recognizes formulas typed **without delimiters** — `f_1 in {0.05, 0.15}`, `E_2[ N_hat * theta_hat_DML | s_1 ] = sum_{k in s_1} w_1k Y_k` — and normalizes informal ASCII math before conversion (`N_hat` → N̂, `sum_` → Σ, `<=` → ≤, `w_1k` → w₁ₖ, `{…}` → set braces). Conservative heuristics keep prose identifiers (`max_size`, `snake_case_name`) untouched, and code fences/spans are never scanned.
 - **Auto-Numbered Equations**: Automatic equation numbering using an invisible 3-column table layout (left margin, centered equation, right-aligned numbering tag such as `(1)`).
 - **Modern Desktop GUI**:
-  - Dark-themed code editor with real-time LaTeX syntax highlighting.
-  - Live equation counter showing detected formulas as you type.
-  - Template dropdown for quick insertion of fractions, summations, integrals, and matrices.
-  - Non-blocking asynchronous conversion with progress indicators.
-  - 1-click **Open File** and **Open Folder** actions upon completion.
+  - Dark-themed code editor with line numbers, current-line highlight, and
+    real-time LaTeX syntax highlighting driven by the shared math tokenizer.
+  - **Live conversion preview** in a split pane beside the editor: a white
+    "paper" view showing headings, tables, code and Unicode-prettified math
+    (fractions, roots, greek, sub/superscripts) exactly as the conversion will
+    treat them. The preview follows the editor as you scroll, and **clicking a
+    formula jumps to its source** (or vice-versa via scroll sync).
+  - **Formula repair tools**: `Ctrl+M` wraps a partial selection as `$…$`
+    (or `$$…$$` when multi-line), and the **Formula Inspector** lets you edit a
+    formula, preview its normalized form, see whether it converts to Word math
+    or will fall back to text, and insert it as inline math, display math, or
+    code — all **before** saving anything to disk. The Convert button is now
+    *Convert & Save*, making the vet-then-save flow explicit.
+  - Menu bar with keyboard shortcuts: `Ctrl+O` open, `Ctrl+S` save output,
+    `Ctrl+F` find & replace (with match count), `F3`/`Shift+F3` find next/prev,
+    `Ctrl+M` wrap as formula, `F5` refresh preview, `Ctrl+Return` convert & save.
+  - Live equation counter and status bar (caret position, word count,
+    display/inline equation counts).
+  - Template dropdown / Insert menu for quick insertion of fractions,
+    summations, integrals, and matrices.
+  - Options persisted to `~/.latex-to-word-converter.json` (window geometry,
+    numbering format, output folder), plus optional auto-open after conversion.
+  - Non-blocking asynchronous conversion with progress indicator, a status log
+    listing any failed formulas by line number, and 1-click **Open File** /
+    **Open Folder** actions upon completion.
 - **CLI & Python API**: Effortless headless execution for batch jobs or automated CI/CD documentation pipelines.
 - **Word VBA Automation Suite**: Bundled `.bas` macro module for dynamic in-Word equation renumbering and cross-reference generation (`Eq. (n)`).
 - **Academic Typography**: Enforces standard academic formatting (1-inch margins, Times New Roman 12pt body, 1.15 line spacing, 6pt spacing after paragraphs).
@@ -70,6 +91,10 @@ git clone https://github.com/Timoyaj/latex-to-word-converter.git
 cd latex-to-word-converter
 pip install -r requirements.txt
 ```
+
+> **Note:** the bundled `core/MML2OMML.XSL` is used automatically. To point at
+> a different stylesheet (e.g. from an Office installation), set the
+> `LWX_MML2OMML_XSL` environment variable to its full path.
 
 ### 2. Launch the Desktop GUI
 
@@ -123,8 +148,24 @@ print(f"Converted {stats['equations_converted']} equations successfully!")
 
 The desktop application (`gui/app.py`) provides an intuitive authoring and conversion environment:
 
-- **Editor**: Multi-line editor styled in Catppuccin Mocha colors with gold/green syntax highlighting for mathematical blocks.
-- **Template Library**: One-click insertion of common mathematical constructs:
+- **Editor**: Multi-line editor styled in Catppuccin Mocha colors with gold/green syntax
+  highlighting for mathematical blocks, a line-number gutter, current-line highlight,
+  scrollbars, undo/redo, and find & replace.
+- **Live Preview pane** (split beside the editor): renders the whole document —
+  headings, paragraphs, quotes, lists, code fences, tables and equations — as it
+  will convert. Math is shown in Unicode (`\frac{-b \pm \sqrt{b^2-4ac}}{2a}` →
+  `(-b ± √(b²-4ac))/(2a)`, `N_h` → `Nₕ`) with auto-numbered display labels.
+  The preview tracks the editor's scroll position; clicking any formula selects
+  its exact source span in the editor. Press `F5` to force a refresh.
+- **Formula repair**: select a partial or delimiter-less formula and press
+  `Ctrl+M` to wrap it as `$…$`/`$$…$$`, or open the **Formula Inspector** to
+  edit it, inspect the normalized form and conversion status (math zone vs.
+  text fallback), and insert it as inline math, display math, or code — vetting
+  the whole conversion before anything is written to disk.
+- **Menus & shortcuts**: File (`Ctrl+O`, `Ctrl+S`), Edit (find/replace, undo/redo),
+  Insert (templates), Help (About). Convert & save with `Ctrl+Return`.
+- **Template Library** (toolbar dropdown or Insert menu): one-click insertion of common
+  mathematical constructs:
   - Fractions: `$$\frac{a}{b}$$`
   - Summations: `$$\sum_{i=1}^{n} x_i$$`
   - Definite Integrals: `$$\int_{a}^{b} f(x)\, dx$$`
@@ -152,10 +193,18 @@ Located in [`macros/EquationAutoNumbering.bas`](macros/EquationAutoNumbering.bas
 
 | Macro Name | Description |
 | :--- | :--- |
-| **`RenumberAllEquations`** | Scans all 1×3 equation tables in the document and renumbers them sequentially from `(1)` to `(N)`. Essential after rearranging sections. |
+| **`ConvertAllLatexInDocument`** | Converts all `$$…$$` (including **multi-line** blocks) and `$…$` formulas to native Word equations. Currency amounts (`$5.00 … $10.00`) and escaped `\$` are never converted. Optional auto-numbering via **SEQ fields**. |
+| **`ConvertSelectionLatex`** | Converts only the currently selected LaTeX text into a Word equation. |
+| **`RenumberAllEquations`** | Renumbers all equation tables sequentially. Updates SEQ fields and legacy literal labels — preserving formats like `({n})`, `[Eq. {n}]`, `Eq. {n}` produced by the Python app. |
 | **`InsertEquationNumber`** | Inserts a borderless 3-column table at the cursor position with the next sequential equation number ready for manual entry. |
-| **`InsertEquationReference`** | Prompts for an equation number, validates its existence in the document, and inserts formatted text `Eq. (n)` at the cursor. |
+| **`InsertEquationReference`** | Prompts for an equation number and inserts a **live `REF` field** (`Eq. (n)`) that updates when equations are renumbered. |
 | **`CountEquations`** | Utility function returning the total count of numbered equation tables. |
+
+Equation tables are tagged with `EqTbl<n>` bookmarks and their number cells
+with `EqNum<n>` bookmarks, so cross-references stay correct across renumbering.
+Each macro run is a single undo step. See
+[`tests/fixtures/vba/manual_test_checklist.md`](tests/fixtures/vba/manual_test_checklist.md)
+for the Word acceptance script.
 
 ---
 
@@ -188,21 +237,62 @@ latex-to-word-converter/
 ├── core/                           # Core conversion library
 │   ├── __init__.py                 # Exports LatexToWordConverter
 │   ├── converter.py                # LaTeX/Markdown to OMML .docx engine
+│   ├── math_tokens.py              # Shared inline/display math tokenizer
 │   └── MML2OMML.XSL                # Microsoft MathML-to-OMML XSLT stylesheet
 ├── gui/                            # Desktop user interface
 │   ├── __init__.py
 │   └── app.py                      # Tkinter application with live syntax highlighting
 ├── macros/                         # Word automation
-│   └── EquationAutoNumbering.bas   # VBA macros for in-document renumbering
-├── examples/                       # Test suites & sample documents
+│   └── EquationAutoNumbering.bas   # VBA macros: convert, renumber, live cross-refs
+├── examples/                       # Sample documents
 │   ├── sample_equations.md         # Full Markdown test suite with 10 display equations
 │   └── sample_equations.docx       # Compiled native Word reference document
+├── tests/                          # Pytest suite & fixtures
+│   ├── fixtures/md/                # Markdown input fixtures
+│   ├── fixtures/expected/          # Structural goldens for generated docs
+│   ├── fixtures/vba/               # Word fixtures + manual macro checklist
+│   ├── test_math_tokens.py         # Tokenizer unit tests
+│   ├── test_clean_latex.py         # LaTeX cleaner unit tests
+│   ├── test_converter_docx.py      # Engine integration tests
+│   ├── test_cli.py                 # CLI tests
+│   └── test_gui_smoke.py           # GUI smoke tests (skip headless)
+├── .github/workflows/ci.yml        # GitHub Actions: pytest on Python 3.9–3.12
 ├── .gitignore                      # Python/Windows/Word gitignore rules
 ├── LICENSE                         # MIT License
 ├── main.py                         # Application entrypoint launcher
 ├── README.md                       # Comprehensive documentation
-└── requirements.txt                # Python package dependencies
+├── requirements.txt                # Python package dependencies
+└── requirements-dev.txt            # Test dependencies (pytest)
 ```
+
+---
+
+## 🧪 Testing & Fixtures
+
+The project ships with a pytest suite and a fixture pack under [`tests/`](tests/):
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests/
+```
+
+- `tests/fixtures/md/` — Markdown inputs covering inline/display math,
+  numbering formats, pipe tables with math, code fences, currency/escape edge
+  cases, and deliberate conversion failures.
+- `tests/fixtures/expected/` — structural goldens (equation counts, table
+  counts, numbering labels) asserted against the generated `.docx` XML.
+- `tests/fixtures/vba/` — Word documents plus a
+  [manual test checklist](tests/fixtures/vba/manual_test_checklist.md) for the
+  VBA macro suite (regenerate the documents with
+  `python tests/fixtures/vba/make_fixtures.py`).
+- `tests/test_math_tokens.py`, `tests/test_clean_latex.py` — unit tests for the
+  shared tokenizer and LaTeX cleaner (regression-locked for `$5.00` currency,
+  `\$` escapes, `\middle`, and `\mathbb` handling).
+- `tests/test_converter_docx.py`, `tests/test_cli.py`, `tests/test_gui_smoke.py`
+  — integration tests for the engine, CLI, and GUI (GUI tests skip headless).
+
+CI runs the suite on Python 3.9–3.12 via GitHub Actions
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ---
 
