@@ -258,7 +258,9 @@ def _trim_prose_edges(span: str) -> str:
 
     while span:
         # left edge
-        m = re.match(r'([A-Za-z][A-Za-z0-9]*(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?)\s+', span)
+        m = re.match(
+            r'([A-Za-z][A-Za-z0-9]*:?(?:[_^](?:\{[^}]*\}|[A-Za-z0-9]+))?)\s+',
+            span)
         if m and not keep(0, m.end(1), "left"):
             span = span[m.end():]
             continue
@@ -588,6 +590,32 @@ def display_blocks(lines: List[str]) -> List[Tuple[int, int]]:
             else:
                 i += 1  # unterminated: ignore
             continue
+        if not stripped.startswith(("|", "#", "-", "*", ">")):
+            # display opener after prose on the same line ("and $$ … $$")
+            idx = stripped.find("$$")
+            if idx > 0 and (not stripped[idx - 1].isalnum()
+                            or stripped[idx - 1].isspace()):
+                rest = stripped[idx + 2:].strip()
+                if rest.endswith("$$") and "$$" not in rest[:-2] \
+                        and rest[:-2].strip():
+                    blocks.append((i, i))
+                    i += 1
+                    continue
+                if not rest:
+                    j = i + 1
+                    closed = False
+                    while j < n:
+                        s = lines[j].strip()
+                        if s.endswith("$$"):
+                            blocks.append((i, j))
+                            closed = True
+                            break
+                        j += 1
+                    if closed:
+                        i = j + 1
+                    else:
+                        i += 1  # unterminated: ignore
+                    continue
         i += 1
     return blocks
 

@@ -10,7 +10,11 @@ UI/UX highlights:
   * menu bar with keyboard shortcuts (Ctrl+O/S/F, F3, Ctrl+Return …)
   * code editor with line-number gutter, current-line highlight and
     Catppuccin syntax highlighting driven by the shared math tokenizer
+  * live preview on a white "paper" panel with clickable formulas
   * find & replace bar (Ctrl+F) with match count
+  * flat icon toolbar with hover states and tooltips
+  * zoom (Ctrl+= / Ctrl+- / Ctrl+0), word-wrap and preview toggles
+  * placeholder hints, empty-state guidance and collapsible status log
   * live status bar: caret position, word count, display/inline equation counts
   * options persisted to ~/.latex-to-word-converter.json (geometry + settings)
   * non-blocking conversion with a status log and optional auto-open
@@ -31,6 +35,7 @@ from tkinter import (
     NW, SE, E, W, SUNKEN, FLAT, VERTICAL,
 )
 import tkinter
+import tkinter as tk
 import tkinter.ttk as ttk
 
 # Ensure project root is importable
@@ -62,21 +67,88 @@ def open_path(path: str):
         subprocess.Popen(["xdg-open", path])
 
 
-# ── colour palette ────────────────────────────────────────────────
-_BG          = "#f7f8fa"
-_PANEL_FG    = "#334155"
-_MUTED       = "#64748b"
+# ── design tokens ─────────────────────────────────────────────────
+# Light chrome (app panels / cards)
+_BG          = "#f3f4f8"   # app background
+_SURFACE     = "#ffffff"   # cards / paper
+_BORDER      = "#e2e6ef"   # hairlines
+_INK         = "#1e293b"   # primary text
+_MUTED       = "#64748b"   # secondary text
+_FAINT       = "#94a3b8"   # tertiary text
+_ACCENT      = "#4f46e5"   # indigo accent
+_ACCENT_HOV  = "#6366f1"
+_ACCENT_SOFT = "#eef2ff"   # tinted hover / chips
+_OK          = "#059669"
+_WARN        = "#b45309"
+_ERR         = "#dc2626"
+_LOG_BG      = "#f1f5f9"
+
+# Dark editor (Catppuccin Mocha)
 _EDITOR_BG   = "#1e1e2e"
 _EDITOR_FG   = "#cdd6f4"
 _GUTTER_BG   = "#181825"
 _GUTTER_FG   = "#6c7086"
 _LINE_HL     = "#2a2a3d"
-_MATH_FG     = "#f9e2af"      # yellow-ish for inline $…$
-_DISPLAY_FG  = "#a6e3a1"      # green for $$…$$
-_ACCENT      = "#1d4ed8"      # blue button
-_ACCENT_HOV  = "#2563eb"
-_LOG_BG      = "#f1f5f9"
-_FIND_BG     = "#eef2ff"
+_MATH_FG     = "#f9e2af"   # inline $…$
+_DISPLAY_FG  = "#a6e3a1"   # display $$…$$
+
+_UI_FONT     = ("Segoe UI", 10)
+_UI_BOLD     = ("Segoe UI Semibold", 10)
+_CAPTION     = ("Segoe UI Semibold", 8)
+_MONO        = "Consolas"
+_SERIF       = "Georgia"
+_BASE_SIZE   = 11          # editor / preview base font size (zoomable)
+
+
+class Tooltip:
+    """Small delayed tooltip for any widget."""
+
+    def __init__(self, widget, text: str, delay: int = 550):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._job = None
+        self._tip = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+        widget.bind("<Destroy>", lambda e: self._hide(), add="+")
+
+    def _schedule(self, _e=None):
+        self._cancel()
+        self._job = self.widget.after(self.delay, self._show)
+
+    def _cancel(self):
+        if self._job:
+            try:
+                self.widget.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+
+    def _show(self):
+        if self._tip or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 8
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self._tip = tw = Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            tw, text=self.text, justify=LEFT, anchor=W,
+            background="#111827", foreground="#f9fafb",
+            font=("Segoe UI", 9), padx=8, pady=4,
+        ).pack()
+        tw.lift()
+
+    def _hide(self, _e=None):
+        self._cancel()
+        if self._tip:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -105,6 +177,12 @@ class ConverterApp:
         self._busy: bool = False
 
         self.settings = self._load_settings()
+        try:
+            zoom = int(self.settings.get("zoom", 0) or 0)
+        except (TypeError, ValueError):
+            zoom = 0
+        self._zoom = max(-3, min(10, zoom))
+        self._wrap_enabled = bool(self.settings.get("wrap", False))
 
         self._configure_root()
         self._build_ui()
@@ -131,6 +209,8 @@ class ConverterApp:
                 "autonumber": bool(self.autonumber_var.get()),
                 "eq_format": self.eq_fmt_var.get(),
                 "autopen": bool(self.autopen_var.get()),
+                "zoom": int(self._zoom),
+                "wrap": bool(self._wrap_enabled),
                 "last_open_dir": self._last_open_dir,
                 "last_output_dir": self._last_output_dir,
             })
@@ -144,10 +224,12 @@ class ConverterApp:
     # ------------------------------------------------------------------
     def _configure_root(self):
         self.root.title(APP_NAME)
-        self.root.geometry("980x780")
-        self.root.minsize(800, 620)
+        self.root.geometry("1060x800")
+        self.root.minsize(860, 640)
         self.root.configure(bg=_BG)
         self.root.protocol("WM_DELETE_WINDOW", self._quit)
+
+        self._apply_windows_dark_titlebar()
 
         style = ttk.Style()
         try:
@@ -159,22 +241,37 @@ class ConverterApp:
                 pass
 
         # custom styles
-        style.configure("Accent.TButton",
-                        font=("Segoe UI Semibold", 12),
-                        foreground="white", background=_ACCENT)
-        style.map("Accent.TButton",
-                  background=[("active", _ACCENT_HOV), ("disabled", "#93c5fd")])
-        style.configure("Tool.TButton", font=("Segoe UI", 10))
-        style.configure("TLabel", font=("Segoe UI", 10), background=_BG)
-        style.configure("TCheckbutton", font=("Segoe UI", 10), background=_BG)
-        style.configure("TLabelframe", background=_BG)
-        style.configure("TLabelframe.Label",
-                        font=("Segoe UI Semibold", 10), background=_BG,
-                        foreground=_PANEL_FG)
-        style.configure("Status.TLabel",
-                        font=("Segoe UI", 9), background=_BG, foreground=_MUTED)
-        style.configure("Horizontal.TProgressbar", troughcolor="#e2e8f0",
-                        background=_ACCENT)
+        style.configure("TLabel", font=_UI_FONT, background=_BG,
+                        foreground=_INK)
+        style.configure("TCheckbutton", font=_UI_FONT, background=_BG,
+                        foreground=_INK)
+        style.map("TCheckbutton", background=[("active", _BG)])
+        style.configure("Subtitle.TLabel", font=_UI_BOLD,
+                        background=_BG, foreground=_INK)
+        style.configure("Chip.TLabel", font=("Segoe UI Semibold", 9),
+                        background=_ACCENT_SOFT, foreground=_ACCENT,
+                        padding=(10, 3))
+        style.configure("TLabelframe", background=_BG, relief=FLAT,
+                        borderwidth=0)
+        style.configure("TLabelframe.Label", font=_CAPTION,
+                        background=_BG, foreground=_MUTED)
+        style.configure("Status.TLabel", font=("Segoe UI", 9),
+                        background=_BG, foreground=_MUTED)
+        style.configure("Horizontal.TProgressbar", troughcolor=_BORDER,
+                        background=_ACCENT, borderwidth=0)
+
+    def _apply_windows_dark_titlebar(self):
+        """Best-effort dark title bar on Windows 10 1809+ / 11 (ignores failures)."""
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (11/10)
+                res = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(ctypes.c_int(1)), 4)
+                if res == 0:
+                    break
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Build the complete UI
@@ -182,128 +279,172 @@ class ConverterApp:
     def _build_ui(self):
         self._build_menubar()
 
-        outer = ttk.Frame(self.root, padding=(10, 8, 10, 6))
+        outer = ttk.Frame(self.root, padding=(14, 10, 14, 8))
         outer.pack(fill=BOTH, expand=True)
 
-        # ── title bar ─────────────────────────────────────────────
-        title_frame = ttk.Frame(outer)
-        title_frame.pack(fill=X, pady=(0, 4))
-        ttk.Label(title_frame,
-                  text=APP_NAME,
-                  font=("Segoe UI", 17, "bold")).pack(side=LEFT)
-        ttk.Label(title_frame,
-                  text=f"Native editable OMML equations · v{APP_VERSION}",
-                  font=("Segoe UI", 9),
-                  foreground=_MUTED).pack(side=LEFT, padx=(12, 0))
+        # ── compact header ────────────────────────────────────────
+        header = tk.Frame(outer, bg=_BG)
+        header.pack(fill=X, pady=(0, 8))
+        tk.Label(header, text="◆", font=("Segoe UI", 15, "bold"),
+                 fg=_ACCENT, bg=_BG).pack(side=LEFT, padx=(0, 8))
+        tk.Label(header, text=APP_NAME, font=("Segoe UI Semibold", 15),
+                 fg=_INK, bg=_BG).pack(side=LEFT)
+        ttk.Label(header, text=f"v{APP_VERSION}",
+                  style="Chip.TLabel").pack(side=LEFT, padx=(10, 0))
+        tk.Label(header, text="Native editable OMML equations for Word",
+                 font=("Segoe UI", 9), fg=_MUTED,
+                 bg=_BG).pack(side=LEFT, padx=(12, 0), pady=(3, 0))
 
-        # ── toolbar ───────────────────────────────────────────────
-        tb = ttk.Frame(outer)
-        tb.pack(fill=X, pady=(0, 4))
+        # ── toolbar (flat icon buttons on a card) ─────────────────
+        tb = tk.Frame(outer, bg=_SURFACE, highlightbackground=_BORDER,
+                      highlightthickness=1, bd=0)
+        tb.pack(fill=X, pady=(0, 8))
+        self._toolbar_button(tb, "📂", "Open", self._open_file,
+                             "Open a Markdown / LaTeX file  (Ctrl+O)")
+        self._toolbar_button(tb, "✨", "Sample", self._load_sample,
+                             "Load the bundled sample document")
+        self._toolbar_button(tb, "📋", "Paste", self._paste,
+                             "Paste from the clipboard")
+        self._toolbar_button(tb, "🔍", "Find", lambda: self.toggle_find_bar(True),
+                             "Find & replace in the editor  (Ctrl+F)")
+        self._toolbar_button(tb, "📐", "Wrap", self._wrap_formula,
+                             "Wrap the selection as $…$ or $$…$$  (Ctrl+M)")
+        self._toolbar_button(tb, "🩺", "Inspect", self._open_inspector,
+                             "Inspect a formula and preview its conversion")
+        self._toolbar_button(tb, "🗑", "Clear", self._clear,
+                             "Clear the editor")
 
-        ttk.Button(tb, text="📂 Open", style="Tool.TButton",
-                   command=self._open_file).pack(side=LEFT, padx=2)
-        ttk.Button(tb, text="📋 Paste", style="Tool.TButton",
-                   command=self._paste).pack(side=LEFT, padx=2)
-        ttk.Button(tb, text="🔍 Find", style="Tool.TButton",
-                   command=self.toggle_find_bar).pack(side=LEFT, padx=2)
-        ttk.Button(tb, text="📐 Wrap formula", style="Tool.TButton",
-                   command=self._wrap_formula).pack(side=LEFT, padx=2)
-        ttk.Button(tb, text="🩺 Inspect", style="Tool.TButton",
-                   command=self._open_inspector).pack(side=LEFT, padx=2)
-        ttk.Button(tb, text="🗑 Clear", style="Tool.TButton",
-                   command=self._clear).pack(side=LEFT, padx=2)
-
-        ttk.Separator(tb, orient=VERTICAL).pack(side=LEFT, padx=8, fill=Y, pady=2)
+        tk.Frame(tb, width=1, bg=_BORDER).pack(side=LEFT, fill=Y, padx=8, pady=6)
 
         # template menu
         self._tpl_var = StringVar(value="Insert Template…")
         tpl_combo = ttk.Combobox(tb, textvariable=self._tpl_var,
                                  values=list(self.TEMPLATES.keys()),
-                                 state="readonly", width=20)
-        tpl_combo.pack(side=LEFT, padx=2)
+                                 state="readonly", width=19)
+        tpl_combo.pack(side=LEFT, padx=(0, 4), pady=6)
         tpl_combo.bind("<<ComboboxSelected>>", self._insert_template)
+        Tooltip(tpl_combo, "Insert a ready-made equation template at the caret")
 
-        # equation counter label (right side)
+        # equation counter chip (right side)
         self._eq_count_var = StringVar(value="0 display equations detected")
         ttk.Label(tb, textvariable=self._eq_count_var,
-                  font=("Segoe UI", 9), foreground="#6366f1").pack(side=RIGHT, padx=6)
+                  style="Chip.TLabel").pack(side=RIGHT, padx=10)
 
         # ── main split: editor (left) | live preview (right) ─────
         paned = ttk.PanedWindow(outer, orient=HORIZONTAL)
-        paned.pack(fill=BOTH, expand=True, pady=(0, 6))
+        paned.pack(fill=BOTH, expand=True, pady=(0, 8))
         self._paned = paned
 
-        left = ttk.Frame(paned)
-        right = ttk.Frame(paned)
+        left = tk.Frame(paned, bg=_BG)
+        right = tk.Frame(paned, bg=_BG)
         paned.add(left, weight=3)
         paned.add(right, weight=2)
+        self._right_pane = right
+        self._preview_visible = True
 
         # ── find & replace bar (hidden until Ctrl+F) ──────────────
-        self.find_frame = ttk.Frame(left, padding=(8, 6))
+        self.find_frame = tk.Frame(left, bg=_SURFACE,
+                                   highlightbackground=_BORDER,
+                                   highlightthickness=1, bd=0)
         self._find_visible = False
 
-        ttk.Label(self.find_frame, text="Find:").pack(side=LEFT)
+        tk.Label(self.find_frame, text="Find", font=("Segoe UI", 9),
+                 fg=_MUTED, bg=_SURFACE).pack(side=LEFT, padx=(10, 4), pady=6)
         self._find_var = StringVar()
-        self._find_entry = ttk.Entry(self.find_frame, textvariable=self._find_var, width=28)
-        self._find_entry.pack(side=LEFT, padx=4)
+        self._find_entry = ttk.Entry(self.find_frame, textvariable=self._find_var, width=24)
+        self._find_entry.pack(side=LEFT, padx=2, pady=6)
         self._find_entry.bind("<Return>", lambda e: self._find_next())
         self._find_entry.bind("<Escape>", lambda e: self.toggle_find_bar(False))
 
-        ttk.Label(self.find_frame, text="Replace:").pack(side=LEFT, padx=(10, 0))
+        tk.Label(self.find_frame, text="Replace", font=("Segoe UI", 9),
+                 fg=_MUTED, bg=_SURFACE).pack(side=LEFT, padx=(10, 4))
         self._replace_var = StringVar()
-        self._replace_entry = ttk.Entry(self.find_frame, textvariable=self._replace_var, width=22)
-        self._replace_entry.pack(side=LEFT, padx=4)
+        self._replace_entry = ttk.Entry(self.find_frame, textvariable=self._replace_var, width=18)
+        self._replace_entry.pack(side=LEFT, padx=2, pady=6)
         self._replace_entry.bind("<Return>", lambda e: self._replace_current())
         self._replace_entry.bind("<Escape>", lambda e: self.toggle_find_bar(False))
 
-        ttk.Button(self.find_frame, text="▲", width=3,
-                   command=lambda: self._find_next(backwards=True)).pack(side=LEFT, padx=1)
-        ttk.Button(self.find_frame, text="▼", width=3,
-                   command=self._find_next).pack(side=LEFT, padx=1)
-        ttk.Button(self.find_frame, text="Replace",
-                   command=self._replace_current).pack(side=LEFT, padx=1)
-        ttk.Button(self.find_frame, text="All",
-                   command=self._replace_all).pack(side=LEFT, padx=1)
+        self._flat_button(self.find_frame, "▲",
+                          lambda: self._find_next(backwards=True),
+                          "Previous match").pack(side=LEFT, padx=1)
+        self._flat_button(self.find_frame, "▼", self._find_next,
+                          "Next match").pack(side=LEFT, padx=1)
+        self._flat_button(self.find_frame, "Replace",
+                          self._replace_current, "Replace current match").pack(side=LEFT, padx=2)
+        self._flat_button(self.find_frame, "All",
+                          self._replace_all, "Replace all matches").pack(side=LEFT, padx=1)
 
         self._find_status_var = StringVar(value="")
-        ttk.Label(self.find_frame, textvariable=self._find_status_var,
-                  foreground=_MUTED).pack(side=LEFT, padx=8)
-        ttk.Button(self.find_frame, text="✕",
-                   command=lambda: self.toggle_find_bar(False)).pack(side=RIGHT)
+        tk.Label(self.find_frame, textvariable=self._find_status_var,
+                 font=("Segoe UI", 9), fg=_MUTED,
+                 bg=_SURFACE).pack(side=LEFT, padx=10)
+        self._flat_button(self.find_frame, "✕",
+                          lambda: self.toggle_find_bar(False),
+                          "Close find bar  (Esc)").pack(side=RIGHT, padx=6)
 
-        # ── editor (gutter + text + scrollbars) ───────────────────
-        ed_frame = ttk.LabelFrame(left, text="LaTeX / Markdown Input", padding=4)
-        ed_frame.pack(fill=BOTH, expand=True)
+        # ── editor card (gutter + text + scrollbars) ──────────────
+        ed_card = self._card(left)
+        ed_card.pack(fill=BOTH, expand=True)
+        self._ed_card = ed_card
+
+        ed_head = tk.Frame(ed_card, bg=_SURFACE)
+        ed_head.pack(fill=X)
+        tk.Label(ed_head, text="EDITOR", font=_CAPTION, fg=_MUTED,
+                 bg=_SURFACE).pack(side=LEFT, padx=(12, 8), pady=6)
+        self._editor_hint = tk.Label(
+            ed_head, text="Ctrl+M wrap  ·  Ctrl+F find  ·  F5 refresh",
+            font=("Segoe UI", 8), fg=_FAINT, bg=_SURFACE)
+        self._editor_hint.pack(side=RIGHT, padx=12)
+        self._file_chip = tk.Label(
+            ed_head, text="untitled.md", font=("Segoe UI", 9),
+            fg=_MUTED, bg=_SURFACE)
+        self._file_chip.pack(side=RIGHT, padx=8)
+        tk.Frame(ed_card, height=1, bg=_BORDER).pack(fill=X)
+
+        ed_body = tk.Frame(ed_card, bg=_EDITOR_BG)
+        ed_body.pack(fill=BOTH, expand=True)
 
         self.gutter = Text(
-            ed_frame, width=4, padx=6, pady=6, takefocus=0,
+            ed_body, width=4, padx=6, pady=6, takefocus=0,
             borderwidth=0, relief=FLAT, state=DISABLED, wrap="none",
-            font=("Consolas", 11), cursor="arrow",
+            font=(_MONO, _BASE_SIZE), cursor="arrow",
             bg=_GUTTER_BG, fg=_GUTTER_FG,
             selectbackground=_GUTTER_BG, selectforeground=_GUTTER_FG,
         )
         self.gutter.pack(side=LEFT, fill=Y)
 
-        v_scroll = ttk.Scrollbar(ed_frame, orient=VERTICAL)
-        h_scroll = ttk.Scrollbar(outer, orient=HORIZONTAL)
+        v_scroll = ttk.Scrollbar(ed_body, orient=VERTICAL)
+        h_scroll = ttk.Scrollbar(ed_card, orient=HORIZONTAL)
         self.v_scroll = v_scroll
+        self._h_scroll = h_scroll
 
         self.editor = Text(
-            ed_frame, wrap="none", undo=True,
-            font=("Consolas", 11),
+            ed_body, wrap="none", undo=True,
+            font=(_MONO, _BASE_SIZE),
             bg=_EDITOR_BG, fg=_EDITOR_FG,
             insertbackground="#f5f5f5",
             selectbackground="#45475a",
             relief=FLAT, borderwidth=0,
-            padx=8, pady=6,
+            padx=10, pady=8,
             yscrollcommand=self._on_editor_scroll,
             xscrollcommand=h_scroll.set,
         )
         self.editor.pack(side=LEFT, fill=BOTH, expand=True)
         v_scroll.pack(side=RIGHT, fill=Y)
         v_scroll.config(command=self._on_scrollbar)
-        h_scroll.pack(fill=X, pady=(4, 0))
+        h_scroll.pack(fill=X)
         h_scroll.config(command=self.editor.xview)
+
+        # empty-state hint overlaid on the dark editor
+        self._placeholder = tk.Label(
+            self.editor,
+            text="Paste Markdown or LaTeX here…\n\n"
+                 "Tip: $inline$ and $$display$$ math become editable\n"
+                 "Word equations. Select a formula and press Ctrl+M to\n"
+                 "wrap it, or open a file with Ctrl+O.",
+            font=(_MONO, 10), fg="#585b70", bg=_EDITOR_BG,
+            justify=LEFT, anchor=NW, cursor="xterm")
+        self._placeholder.bind("<Button-1>", lambda e: self.editor.focus_set())
 
         # syntax-highlight + decoration tags
         self.editor.tag_configure("inline_math",  foreground=_MATH_FG)
@@ -321,44 +462,37 @@ class ConverterApp:
         self.editor.bind("<ButtonRelease-1>", self._on_editor_change)
         self.editor.bind("<Configure>", self._on_editor_change)
 
-        # ── live conversion preview (right pane) ─────────────────
-        pv_frame = ttk.LabelFrame(right, text="Live Preview  (click a formula to jump to source)",
-                                  padding=4)
-        pv_frame.pack(fill=BOTH, expand=True)
+        # ── live conversion preview (paper card) ──────────────────
+        pv_card = self._card(right)
+        pv_card.pack(fill=BOTH, expand=True)
+        self._pv_card = pv_card
+
+        pv_head = tk.Frame(pv_card, bg=_SURFACE)
+        pv_head.pack(fill=X)
+        tk.Label(pv_head, text="PREVIEW", font=_CAPTION, fg=_MUTED,
+                 bg=_SURFACE).pack(side=LEFT, padx=(12, 8), pady=6)
+        tk.Label(pv_head, text="click a formula to jump to source",
+                 font=("Segoe UI", 8), fg=_FAINT,
+                 bg=_SURFACE).pack(side=RIGHT, padx=12)
+        tk.Frame(pv_card, height=1, bg=_BORDER).pack(fill=X)
+
+        pv_body = tk.Frame(pv_card, bg=_SURFACE)
+        pv_body.pack(fill=BOTH, expand=True)
+
+        self._pv_scroll = ttk.Scrollbar(pv_body, orient=VERTICAL)
 
         self.preview = Text(
-            pv_frame, wrap=WORD, state=DISABLED,
-            font=("Georgia", 11), bg="#ffffff", fg="#1e293b",
-            relief=FLAT, borderwidth=0, padx=10, pady=8,
+            pv_body, wrap=WORD, state=DISABLED,
+            font=(_SERIF, _BASE_SIZE), bg=_SURFACE, fg=_INK,
+            relief=FLAT, borderwidth=0, padx=16, pady=12,
             cursor="arrow", spacing1=2, spacing3=6,
         )
-        self.preview.pack(fill=BOTH, expand=True)
+        self.preview.pack(side=LEFT, fill=BOTH, expand=True)
+        self._pv_scroll.pack(side=RIGHT, fill=Y)
+        self._pv_scroll.config(command=self.preview.yview)
+        self.preview.configure(yscrollcommand=self._on_preview_scroll)
 
-        self.preview.tag_configure("h1", font=("Georgia", 15, "bold"),
-                                   spacing1=10, spacing3=4)
-        self.preview.tag_configure("h2", font=("Georgia", 13, "bold"),
-                                   spacing1=8, spacing3=3)
-        self.preview.tag_configure("h3", font=("Georgia", 12, "bold italic"),
-                                   spacing1=6, spacing3=2)
-        self.preview.tag_configure("h4", font=("Georgia", 11, "bold"),
-                                   spacing1=6, spacing3=2)
-        self.preview.tag_configure("math_run", foreground="#1d4ed8")
-        self.preview.tag_configure("bare_run", foreground="#c2410c",
-                                   underline=True)
-        self.preview.tag_configure("display_run", foreground="#1d4ed8",
-                                   justify="center", font=("Georgia", 12),
-                                   spacing1=8, spacing3=2)
-        self.preview.tag_configure("eq_label", foreground="#94a3b8",
-                                   justify="right")
-        self.preview.tag_configure("code_run", font=("Consolas", 9.5),
-                                   background="#f1f5f9", foreground="#475569")
-        self.preview.tag_configure("quote_run", font=("Georgia", 11, "italic"),
-                                   lmargin1=18, lmargin2=18,
-                                   foreground="#475569")
-        self.preview.tag_configure("table_run", font=("Georgia", 10.5),
-                                   lmargin1=6, foreground="#334155")
-        self.preview.tag_configure("rule_run", foreground="#cbd5e1")
-        self.preview.tag_configure("formula_hot", background="#eef2ff")
+        self._configure_preview_tags()
 
         self.preview.bind("<Button-1>", self._on_preview_click)
         self.preview.bind("<Double-Button-1>", lambda e: self._open_inspector())
@@ -366,87 +500,313 @@ class ConverterApp:
         self._preview_srcmap: dict = {}
         self._preview_line_index: list = []
         self._preview_job = None
+        self._sync_job = None
+        self._pv_scroll_job = None
+        self._scroll_syncing = False
 
-        # ── options panel ─────────────────────────────────────────
-        opt = ttk.LabelFrame(outer, text="Conversion Options", padding=(8, 4))
-        opt.pack(fill=X, pady=(0, 6))
+        # ── options card ──────────────────────────────────────────
+        opt = self._card(outer)
+        opt.pack(fill=X, pady=(0, 8))
 
-        row1 = ttk.Frame(opt)
-        row1.pack(fill=X, pady=2)
+        row1 = tk.Frame(opt, bg=_SURFACE)
+        row1.pack(fill=X, padx=12, pady=(8, 4))
+        tk.Label(row1, text="OPTIONS", font=_CAPTION, fg=_MUTED,
+                 bg=_SURFACE).pack(side=LEFT, padx=(0, 12))
 
         self.autonumber_var = BooleanVar(value=bool(self.settings.get("autonumber", True)))
-        cb = ttk.Checkbutton(row1, text="Auto-number equations",
-                             variable=self.autonumber_var,
-                             command=self._toggle_eq_format)
+        cb = tk.Checkbutton(row1, text="Auto-number equations",
+                            variable=self.autonumber_var,
+                            command=self._toggle_eq_format,
+                            font=("Segoe UI", 9), fg=_INK, bg=_SURFACE,
+                            activebackground=_SURFACE, activeforeground=_INK,
+                            selectcolor=_SURFACE, bd=0, highlightthickness=0,
+                            cursor="hand2")
         cb.pack(side=LEFT)
+        Tooltip(cb, "Number display equations in an invisible 3-column table")
 
-        ttk.Label(row1, text="   Format:").pack(side=LEFT)
+        tk.Label(row1, text="format", font=("Segoe UI", 9), fg=_MUTED,
+                 bg=_SURFACE).pack(side=LEFT, padx=(12, 4))
         self.eq_fmt_var = StringVar(value=str(self.settings.get("eq_format", "({n})")))
-        self.eq_fmt_entry = ttk.Entry(row1, textvariable=self.eq_fmt_var, width=10)
-        self.eq_fmt_entry.pack(side=LEFT, padx=4)
+        self.eq_fmt_entry = ttk.Entry(row1, textvariable=self.eq_fmt_var, width=9)
+        self.eq_fmt_entry.pack(side=LEFT)
+        Tooltip(self.eq_fmt_entry, "Numbering template — {n} is replaced by the equation number")
 
         self.autopen_var = BooleanVar(value=bool(self.settings.get("autopen", False)))
-        ttk.Checkbutton(row1, text="Open file after conversion",
-                        variable=self.autopen_var).pack(side=LEFT, padx=(18, 0))
+        cb2 = tk.Checkbutton(row1, text="Open document when done",
+                             variable=self.autopen_var,
+                             font=("Segoe UI", 9), fg=_INK, bg=_SURFACE,
+                             activebackground=_SURFACE, activeforeground=_INK,
+                             selectcolor=_SURFACE, bd=0, highlightthickness=0,
+                             cursor="hand2")
+        cb2.pack(side=LEFT, padx=(18, 0))
+        Tooltip(cb2, "Launch the generated .docx in Word after conversion")
 
-        row2 = ttk.Frame(opt)
-        row2.pack(fill=X, pady=2)
-
-        ttk.Label(row2, text="Output file:").pack(side=LEFT)
+        row2 = tk.Frame(opt, bg=_SURFACE)
+        row2.pack(fill=X, padx=12, pady=(0, 9))
+        tk.Label(row2, text="Save to", font=("Segoe UI", 9), fg=_MUTED,
+                 bg=_SURFACE).pack(side=LEFT, padx=(0, 8))
         self.output_var = StringVar()
-        self.output_entry = ttk.Entry(row2, textvariable=self.output_var, width=52)
-        self.output_entry.pack(side=LEFT, padx=4, fill=X, expand=True)
-        ttk.Button(row2, text="Browse…", command=self._browse_output).pack(side=LEFT)
+        self.output_entry = ttk.Entry(row2, textvariable=self.output_var)
+        self.output_entry.pack(side=LEFT, padx=(0, 6), fill=X, expand=True)
+        self._flat_button(row2, "Browse…", self._browse_output,
+                          "Choose the destination .docx file").pack(side=LEFT)
 
         # ── action bar ────────────────────────────────────────────
-        act = ttk.Frame(outer)
-        act.pack(fill=X, pady=(0, 4))
+        act = tk.Frame(outer, bg=_BG)
+        act.pack(fill=X, pady=(0, 6))
 
-        self.convert_btn = ttk.Button(
-            act, text="⚡  Convert & Save  (Ctrl+Return)",
-            style="Accent.TButton",
-            command=self._start_conversion,
+        self.convert_btn = tk.Button(
+            act, text="⚡  Convert & Save    Ctrl+↵",
+            font=("Segoe UI Semibold", 11), fg="white",
+            bg=_ACCENT, activebackground=_ACCENT_HOV,
+            activeforeground="white", disabledforeground="#e0e7ff",
+            relief=FLAT, bd=0, padx=24, pady=9, cursor="hand2",
+            highlightthickness=0, command=self._start_conversion,
         )
-        self.convert_btn.pack(side=LEFT, ipady=6, ipadx=14)
+        self.convert_btn.pack(side=LEFT)
+        self.convert_btn.bind(
+            "<Enter>", lambda e: self.convert_btn.configure(bg=_ACCENT_HOV)
+            if str(self.convert_btn["state"]) != DISABLED else None)
+        self.convert_btn.bind(
+            "<Leave>", lambda e: self.convert_btn.configure(bg=_ACCENT))
+        Tooltip(self.convert_btn, "Convert the editor contents and write the .docx  (Ctrl+Return)")
 
-        self.progress = ttk.Progressbar(act, mode="indeterminate", length=180)
-        self.progress.pack(side=LEFT, padx=12)
+        self.progress = ttk.Progressbar(act, mode="indeterminate", length=160)
+        self.progress.pack(side=LEFT, padx=(16, 0), pady=8)
 
         # post-conversion buttons (hidden initially)
-        self._post_frame = ttk.Frame(act)
-        ttk.Button(self._post_frame, text="📄 Open File",
-                   command=self._open_output_file).pack(side=LEFT, padx=2)
-        ttk.Button(self._post_frame, text="📁 Open Folder",
-                   command=self._open_output_folder).pack(side=LEFT, padx=2)
+        self._post_frame = tk.Frame(act, bg=_BG)
+        self._flat_button(self._post_frame, "📄  Open File",
+                          self._open_output_file,
+                          "Open the generated document").pack(side=LEFT, padx=(0, 4))
+        self._flat_button(self._post_frame, "📁  Open Folder",
+                          self._open_output_folder,
+                          "Show the output folder in Explorer").pack(side=LEFT)
 
-        # ── log area ──────────────────────────────────────────────
-        log_frame = ttk.LabelFrame(outer, text="Status Log", padding=4)
-        log_frame.pack(fill=X)
+        # ── collapsible log card ──────────────────────────────────
+        self._log_wrap = tk.Frame(outer, bg=_BG)
+        self._log_wrap.pack(fill=X)
+
+        log_head = tk.Frame(self._log_wrap, bg=_BG)
+        log_head.pack(fill=X)
+        self._log_toggle = tk.Button(
+            log_head, text="▾  Status Log", font=("Segoe UI Semibold", 9),
+            fg=_MUTED, bg=_BG, activebackground=_BG, activeforeground=_INK,
+            relief=FLAT, bd=0, padx=2, pady=2, cursor="hand2",
+            highlightthickness=0, command=self._toggle_log)
+        self._log_toggle.pack(side=LEFT)
+        self._log_visible = True
+
+        self._log_frame = tk.Frame(self._log_wrap, bg=_LOG_BG,
+                                   highlightbackground=_BORDER,
+                                   highlightthickness=1, bd=0)
+        self._log_frame.pack(fill=X, pady=(3, 0))
 
         self.log = Text(
-            log_frame, height=5, wrap=WORD, state=DISABLED,
-            font=("Consolas", 9),
+            self._log_frame, height=4, wrap=WORD, state=DISABLED,
+            font=(_MONO, 9),
             bg=_LOG_BG, fg="#334155",
             relief=FLAT, borderwidth=0,
-            padx=6, pady=4,
+            padx=10, pady=6,
         )
         self.log.pack(fill=X)
+        self.log.tag_configure("ok", foreground=_OK)
+        self.log.tag_configure("warn", foreground=_WARN)
+        self.log.tag_configure("err", foreground=_ERR)
+        self.log.tag_configure("dim", foreground=_MUTED)
 
         # ── status bar ────────────────────────────────────────────
-        status = ttk.Frame(outer)
-        status.pack(fill=X, pady=(4, 0))
+        status = tk.Frame(outer, bg=_BG)
+        status.pack(fill=X, pady=(6, 0))
         self._status_var = StringVar(value="Ready")
         ttk.Label(status, textvariable=self._status_var,
                   style="Status.TLabel").pack(side=LEFT)
+
+        # zoom controls (right)
+        self._zoom_var = StringVar(value="100%")
+        self._flat_button(status, "+", self._zoom_in, "Zoom in  (Ctrl+=)").pack(side=RIGHT)
+        ttk.Label(status, textvariable=self._zoom_var,
+                  style="Status.TLabel", width=5,
+                  anchor="center").pack(side=RIGHT)
+        self._flat_button(status, "−", self._zoom_out, "Zoom out  (Ctrl+-)").pack(side=RIGHT)
+
+        tk.Frame(status, width=1, height=14, bg=_BORDER).pack(
+            side=RIGHT, fill=Y, padx=10, pady=2)
         self._math_stat_var = StringVar(value="0 display · 0 inline")
         ttk.Label(status, textvariable=self._math_stat_var,
                   style="Status.TLabel").pack(side=RIGHT)
 
         self._log("Ready. Paste or open a LaTeX/Markdown file to begin.")
         if self.converter.xsl_path:
-            self._log(f"OMML stylesheet loaded: {self.converter.xsl_path}")
+            self._log(f"OMML stylesheet loaded: {self.converter.xsl_path}", "dim")
         else:
-            self._log("⚠ MML2OMML.XSL not found — equations will render as plain text.")
+            self._log("⚠ MML2OMML.XSL not found — equations will render as plain text.",
+                      "warn")
+        self._update_placeholder()
+
+    # ------------------------------------------------------------------
+    # Small UI building blocks
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _card(parent) -> tk.Frame:
+        """White surface card with a hairline border."""
+        return tk.Frame(parent, bg=_SURFACE, highlightbackground=_BORDER,
+                        highlightthickness=1, bd=0)
+
+    def _toolbar_button(self, parent, icon, label, command, tip):
+        btn = tk.Button(
+            parent, text=f"{icon}  {label}", command=command,
+            font=("Segoe UI", 9), fg=_INK, bg=_SURFACE,
+            activebackground=_ACCENT_SOFT, activeforeground=_ACCENT,
+            relief=FLAT, bd=0, padx=10, pady=6, cursor="hand2",
+            highlightthickness=0, takefocus=0,
+        )
+        btn.pack(side=LEFT, padx=1, pady=4)
+        btn.bind("<Enter>", lambda e: btn.configure(bg=_ACCENT_SOFT, fg=_ACCENT))
+        btn.bind("<Leave>", lambda e: btn.configure(bg=_SURFACE, fg=_INK))
+        Tooltip(btn, tip)
+        return btn
+
+    def _flat_button(self, parent, text, command, tip=None):
+        btn = tk.Button(
+            parent, text=text, command=command,
+            font=("Segoe UI", 9), fg=_MUTED, bg=_SURFACE,
+            activebackground=_ACCENT_SOFT, activeforeground=_ACCENT,
+            relief=FLAT, bd=0, padx=8, pady=4, cursor="hand2",
+            highlightthickness=0, takefocus=0,
+        )
+        btn.bind("<Enter>", lambda e: btn.configure(bg=_ACCENT_SOFT, fg=_ACCENT))
+        btn.bind("<Leave>", lambda e: btn.configure(bg=_SURFACE, fg=_MUTED))
+        if tip:
+            Tooltip(btn, tip)
+        return btn
+
+    def _configure_preview_tags(self):
+        z = getattr(self, "_zoom", 0)
+        base = _BASE_SIZE + z
+        self.preview.tag_configure("h1", font=(_SERIF, base + 4, "bold"),
+                                   spacing1=12, spacing3=5)
+        self.preview.tag_configure("h2", font=(_SERIF, base + 2, "bold"),
+                                   spacing1=9, spacing3=3)
+        self.preview.tag_configure("h3", font=(_SERIF, base + 1, "bold italic"),
+                                   spacing1=7, spacing3=2)
+        self.preview.tag_configure("h4", font=(_SERIF, base, "bold"),
+                                   spacing1=6, spacing3=2)
+        self.preview.tag_configure("math_run", foreground=_ACCENT)
+        self.preview.tag_configure("bare_run", foreground="#c2410c",
+                                   underline=True)
+        self.preview.tag_configure("display_run", foreground=_ACCENT,
+                                   justify="center", font=(_SERIF, base + 1),
+                                   spacing1=9, spacing3=3)
+        self.preview.tag_configure("eq_label", foreground=_FAINT,
+                                   justify="right")
+        self.preview.tag_configure("code_run", font=(_MONO, max(7, base - 1)),
+                                   background=_LOG_BG, foreground="#475569")
+        self.preview.tag_configure("quote_run", font=(_SERIF, base, "italic"),
+                                   lmargin1=18, lmargin2=18,
+                                   foreground="#475569")
+        self.preview.tag_configure("table_run", font=(_SERIF, base),
+                                   lmargin1=6, foreground=_INK)
+        self.preview.tag_configure("rule_run", foreground="#cbd5e1")
+        self.preview.tag_configure("formula_hot", background=_ACCENT_SOFT)
+
+    def _update_placeholder(self, text: str = None):
+        """Show the empty-state hint only while the editor is empty."""
+        try:
+            if text is None:
+                text = self.editor.get("1.0", END)
+            empty = not text.strip()
+        except Exception:
+            empty = False
+        if empty:
+            self._placeholder.place(in_=self.editor, x=12, y=10, anchor=NW)
+            self._placeholder.lift()
+        else:
+            self._placeholder.place_forget()
+
+    def _update_file_chip(self):
+        name = Path(self._current_file).name if self._current_file else "untitled.md"
+        try:
+            self._file_chip.configure(text=name)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # View controls: zoom, word wrap, preview pane, log
+    # ------------------------------------------------------------------
+    def _apply_zoom(self):
+        z = self._zoom
+        size = max(7, _BASE_SIZE + z)
+        self.editor.configure(font=(_MONO, size))
+        self.gutter.configure(font=(_MONO, size))
+        self.preview.configure(font=(_SERIF, size))
+        self._configure_preview_tags()
+        try:
+            self._zoom_var.set(f"{round(size / _BASE_SIZE * 100)}%")
+        except Exception:
+            pass
+
+    def _zoom_in(self):
+        if self._zoom < 10:
+            self._zoom += 1
+            self._apply_zoom()
+
+    def _zoom_out(self):
+        if self._zoom > -3:
+            self._zoom -= 1
+            self._apply_zoom()
+
+    def _zoom_reset(self):
+        self._zoom = 0
+        self._apply_zoom()
+
+    def _toggle_wrap(self, enabled=None):
+        wrap = (not self._wrap_enabled) if enabled is None else bool(enabled)
+        self._wrap_enabled = wrap
+        if wrap:
+            self.editor.configure(wrap=WORD)
+            self._h_scroll.pack_forget()
+        else:
+            self.editor.configure(wrap="none")
+            self._h_scroll.pack(fill=X)
+        self._on_editor_change()
+
+    def _toggle_preview(self, visible=None):
+        show = (not self._preview_visible) if visible is None else bool(visible)
+        if show == self._preview_visible:
+            return
+        self._preview_visible = show
+        if show:
+            self._paned.add(self._right_pane, weight=2)
+        else:
+            self._paned.forget(self._right_pane)
+        self._on_editor_change()
+
+    def _toggle_log(self):
+        self._log_visible = not self._log_visible
+        if self._log_visible:
+            self._log_frame.pack(fill=X, pady=(3, 0))
+            self._log_toggle.configure(text="▾  Status Log")
+        else:
+            self._log_frame.pack_forget()
+            self._log_toggle.configure(text="▸  Status Log")
+
+    def _load_sample(self):
+        sample = Path(_PROJECT_ROOT) / "examples" / "sample_equations.md"
+        try:
+            content = sample.read_text(encoding="utf-8")
+        except Exception as exc:
+            messagebox.showerror("Sample Not Found",
+                                 f"Could not read the sample document:\n{exc}")
+            return
+        self.editor.delete("1.0", END)
+        self.editor.insert("1.0", content)
+        self.editor.edit_reset()
+        self._current_file = str(sample)
+        self.output_var.set(str(Path.home() / "Documents" /
+                                "sample_equations.docx"))
+        self._on_editor_change()
+        self._log(f"Loaded sample: {sample}", "dim")
 
     # ------------------------------------------------------------------
     # Menu bar
@@ -457,6 +817,8 @@ class ConverterApp:
         file_menu = tkinter.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Open File…        Ctrl+O",
                               accelerator="Ctrl+O", command=self._open_file)
+        file_menu.add_command(label="Load Sample Document",
+                              command=self._load_sample)
         file_menu.add_command(label="Save Output As…   Ctrl+S",
                               accelerator="Ctrl+S", command=self._browse_output)
         file_menu.add_separator()
@@ -492,7 +854,24 @@ class ConverterApp:
                 command=lambda n=name: self._insert_template(name=n))
         menubar.add_cascade(label="Insert", menu=insert_menu)
 
+        view_menu = tkinter.Menu(menubar, tearoff=0)
+        view_menu.add_command(label="Word Wrap          Ctrl+Shift+W",
+                              accelerator="Ctrl+Shift+W",
+                              command=self._toggle_wrap)
+        view_menu.add_command(label="Show Preview       F2",
+                              accelerator="F2", command=self._toggle_preview)
+        view_menu.add_separator()
+        view_menu.add_command(label="Zoom In            Ctrl+=",
+                              accelerator="Ctrl+=", command=self._zoom_in)
+        view_menu.add_command(label="Zoom Out           Ctrl+-",
+                              accelerator="Ctrl+-", command=self._zoom_out)
+        view_menu.add_command(label="Reset Zoom         Ctrl+0",
+                              accelerator="Ctrl+0", command=self._zoom_reset)
+        menubar.add_cascade(label="View", menu=view_menu)
+
         help_menu = tkinter.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="User Guide         F1",
+                              accelerator="F1", command=self._show_guide)
         help_menu.add_command(label="About", command=self._about)
         menubar.add_cascade(label="Help", menu=help_menu)
 
@@ -505,15 +884,229 @@ class ConverterApp:
         except Exception:
             pass
 
+    def _show_guide(self, _event=None):
+        """User Guide window: how every part of the app works."""
+        win = Toplevel(self.root)
+        win.title(f"{APP_NAME} — User Guide")
+        win.transient(self.root)
+        win.configure(bg=_SURFACE)
+        win.geometry("720x640")
+        win.grab_set()
+
+        body = tk.Frame(win, bg=_SURFACE)
+        body.pack(fill=BOTH, expand=True)
+
+        bar = tk.Frame(body, bg=_SURFACE)
+        bar.pack(fill=X, padx=20, pady=(16, 0))
+        tk.Label(bar, text="◆", font=("Segoe UI", 14, "bold"),
+                 fg=_ACCENT, bg=_SURFACE).pack(side=LEFT, padx=(0, 8))
+        tk.Label(bar, text="User Guide", font=("Segoe UI Semibold", 15),
+                 fg=_INK, bg=_SURFACE).pack(side=LEFT)
+
+        text = Text(body, wrap=WORD, font=("Segoe UI", 10),
+                    bg=_SURFACE, fg=_INK, relief=FLAT, borderwidth=0,
+                    padx=22, pady=12, cursor="arrow", spacing1=1, spacing3=5)
+        scroll = ttk.Scrollbar(body, orient=VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side=RIGHT, fill=Y)
+        text.pack(fill=BOTH, expand=True)
+
+        text.tag_configure("title", font=("Segoe UI Semibold", 13),
+                           foreground=_INK, spacing1=2, spacing3=2)
+        text.tag_configure("h", font=("Segoe UI Semibold", 11),
+                           foreground=_ACCENT, spacing1=16, spacing3=4)
+        text.tag_configure("body", font=("Segoe UI", 10), spacing3=6,
+                           lmargin1=0, lmargin2=0)
+        text.tag_configure("li", font=("Segoe UI", 10), spacing3=3,
+                           lmargin1=18, lmargin2=18)
+        text.tag_configure("key", font=(_MONO, 9), background=_ACCENT_SOFT,
+                           foreground=_ACCENT)
+        text.tag_configure("mono", font=(_MONO, 9), foreground=_MUTED)
+        text.tag_configure("muted", font=("Segoe UI", 9), foreground=_MUTED,
+                           spacing3=8)
+
+        def h(s):
+            text.insert(END, s + "\n", "h")
+
+        def p(s):
+            text.insert(END, s + "\n\n", "body")
+
+        def li(label, s, label_tag="key"):
+            text.insert(END, "•  ", "li")
+            text.insert(END, label, label_tag)
+            text.insert(END, "  —  " + s + "\n", "li")
+
+        def mono(s):
+            text.insert(END, s, "mono")
+
+        text.insert(END, "LaTeX → Word Converter\n", "title")
+        text.insert(END,
+                    "Turn Markdown + LaTeX into a Microsoft Word (.docx) document "
+                    "whose equations are native, editable OMML math — not pictures. "
+                    "Equations can be auto-numbered, and bundled Word macros can "
+                    "renumber and cross-reference them inside Word.\n\n", "body")
+
+        h("1 · Getting started")
+        p("Type or paste Markdown/LaTeX into the dark editor on the left, watch "
+          "the live preview on the right, then press Convert & Save to write "
+          "the .docx. Load the bundled sample with the Sample toolbar button "
+          "to see every supported construct at once.")
+
+        h("2 · The editor")
+        li("Line-number gutter", "always in sync with the editor's scroll position.")
+        li("Syntax colors", "inline $…$ math glows gold, display $$…$$ math green, "
+           "bare formulas peach and underlined, code fences gray.")
+        li("Current-line highlight", "the row with your caret is softly shaded.")
+        li("Empty-state hint", "when the editor is empty, a dim hint shows how to "
+           "start; it disappears as soon as you type.")
+        li("File chip", "the header strip shows the loaded file name.")
+
+        h("3 · Writing math")
+        li("Inline math", "wrap LaTeX in single dollars: $E=mc^2$.")
+        li("Display math", "use $$…$$ on one line, or open $$ on its own line and "
+           "close with $$ after the formula. A $$ opener may follow prose on the "
+           "same line (\"and $$\\n y \\n$$\").")
+        li("Bracketed display", "\\[ … \\] works exactly like $$…$$.")
+        li("Bare formulas", "informal math without any delimiters is detected — "
+           "e.g. rate_2 <= t_1, E_2[ N_hat * theta_hat_DML | s_1 ] = sum_{k in "
+           "s_1} w_1k Y_k. ASCII is normalized (N_hat → N̂, sum_ → Σ, <= → ≤, "
+           "w_1k → w₁ₖ). Prose like max_size or snake_case_name is left alone.")
+        p("Currency amounts ($5.00 … $10.00), escaped \\$ and code fences are "
+          "never treated as math — detection follows Pandoc dollar-math rules.")
+
+        h("4 · Live preview")
+        p("The PREVIEW panel renders the document exactly as conversion will: "
+          "headings, lists, quotes, tables, code fences, and Unicode-prettified "
+          "math with numbering labels. It scrolls in sync with the editor in "
+          "both directions, and scrolling the preview moves the editor too.")
+        li("Click a formula", "jumps to and selects its exact source span in the editor.")
+        li("Double-click a formula", "opens the Formula Inspector pre-filled with it.")
+        li("F5", "forces a preview refresh (it normally refreshes itself ~120 ms after typing).")
+
+        h("5 · Formula tools")
+        li("Wrap  (Ctrl+M)", "select any text and wrap it as $…$ — or $$…$$ when the "
+           "selection spans multiple lines. Ideal for turning a bare detection "
+           "into a deliberate formula.")
+        li("Inspect  (double-click / toolbar)", "edit a formula, see its normalized "
+           "and pretty forms, and check whether it converts to a Word math zone "
+           "or would fall back to plain text. Insert it as inline math, display "
+           "math, or code — nothing is saved until Convert & Save.")
+
+        h("6 · Templates")
+        p("The Insert Template dropdown (and the Insert menu) inserts ready-made "
+          "constructs at the caret: fractions, summations, integrals, matrices, "
+          "square roots, greek sets, and sub/superscripts.")
+
+        h("7 · Find & replace")
+        li("Ctrl+F", "opens the find bar pre-filled with the current selection.")
+        li("F3 / Shift+F3", "next / previous match (wraps around).")
+        li("Replace / All", "replace the current match or every match (case-insensitive).")
+        li("Esc", "closes the bar and clears the match highlight.")
+
+        h("8 · Conversion options")
+        li("Auto-number equations", "display equations get sequential numbers laid "
+           "out in an invisible three-column table (margin, centered equation, tag).")
+        li("Numbering format", "any template containing {n} — e.g. ({n}), Eq. {n}, [{n}].")
+        li("Open document when done", "launches the .docx in Word automatically.")
+        li("Save to", "destination .docx path; Browse… picks it. Open a .md file and "
+           "the output path is suggested automatically.")
+
+        h("9 · Converting")
+        p("Convert & Save (Ctrl+Return) runs the conversion in the background — "
+          "the button shows progress and the Status Log reports "
+          "“Success! n/n equations converted”. Formulas that could not convert "
+          "are listed with their line number and kept as plain text. After a "
+          "successful run, Open File and Open Folder buttons appear next to the "
+          "log. Log entries are color-coded: green success, amber warnings, "
+          "red errors. The log can be collapsed via its caption.")
+
+        h("10 · View controls")
+        li("Ctrl+= / Ctrl+- / Ctrl+0", "zoom the editor and preview in, out, or reset "
+           "(the current percent shows in the status bar).")
+        li("Ctrl+Shift+W", "toggle word wrap in the editor (horizontal scrollbar "
+           "appears when wrap is off).")
+        li("F2", "show or hide the preview pane to focus on the editor.")
+
+        h("11 · Keyboard shortcuts")
+        shortcuts = [
+            ("Ctrl+O", "Open file"), ("Ctrl+S", "Choose output file"),
+            ("Ctrl+Return", "Convert & save"), ("Ctrl+F", "Find & replace"),
+            ("F3 / Shift+F3", "Find next / previous"),
+            ("Ctrl+M", "Wrap selection as formula"),
+            ("Ctrl+= / Ctrl+-", "Zoom in / out"), ("Ctrl+0", "Reset zoom"),
+            ("Ctrl+Shift+W", "Toggle word wrap"), ("F2", "Toggle preview pane"),
+            ("F5", "Refresh preview"), ("F1", "This user guide"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+        ]
+        for keys, desc in shortcuts:
+            li(keys, desc)
+
+        h("12 · Settings, files & Word macros")
+        p("Window geometry, numbering options, zoom, word-wrap and folder "
+          "choices persist to ~/.latex-to-word-converter.json. The sample "
+          "document lives at examples/sample_equations.md. Inside Word, the "
+          "bundled macros/EquationAutoNumbering.bas module converts remaining "
+          "$$…$$ text, renumbers equations and inserts live Eq. (n) cross-"
+          "references — import it via Word's VBA editor (Alt+F11).")
+        text.insert(END, "If the log warns that MML2OMML.XSL was not found, set the "
+                    "LWX_MML2OMML_XSL environment variable to a stylesheet path — "
+                    "otherwise equations fall back to plain text.\n", "muted")
+
+        text.configure(state=DISABLED)
+        text.focus_set()
+        win.bind("<Escape>", lambda e: win.destroy())
+        return win
+
     def _about(self):
-        messagebox.showinfo(
-            "About",
-            f"{APP_NAME}\nVersion {APP_VERSION}\n\n"
-            "Markdown/LaTeX → Word with native OMML equations,\n"
-            "automatic numbering, and Word VBA automation.\n\n"
-            "Math detection: Pandoc dollar-math rules\n"
-            "(currency, \\$ escapes and code fences are safe).",
-        )
+        win = Toplevel(self.root)
+        win.title(f"About {APP_NAME}")
+        win.transient(self.root)
+        win.configure(bg=_BG)
+        win.resizable(False, False)
+        win.grab_set()
+
+        body = tk.Frame(win, bg=_BG, padx=24, pady=20)
+        body.pack(fill=BOTH, expand=True)
+
+        tk.Label(body, text="◆", font=("Segoe UI", 22, "bold"),
+                 fg=_ACCENT, bg=_BG).pack(anchor=W)
+        tk.Label(body, text=APP_NAME, font=("Segoe UI Semibold", 16),
+                 fg=_INK, bg=_BG).pack(anchor=W, pady=(2, 0))
+        tk.Label(body, text=f"Version {APP_VERSION}",
+                 font=("Segoe UI", 9), fg=_MUTED, bg=_BG).pack(anchor=W)
+
+        tk.Label(
+            body,
+            text=("Markdown/LaTeX → Word with native, editable OMML equations,\n"
+                  "automatic equation numbering and Word VBA automation.\n\n"
+                  "Math detection follows Pandoc dollar-math rules —\n"
+                  "currency, \\$ escapes and code fences are never converted."),
+            font=("Segoe UI", 10), fg=_INK, bg=_BG,
+            justify=LEFT).pack(anchor=W, pady=(14, 12))
+
+        shortcuts = [
+            ("Ctrl+O", "Open file"), ("Ctrl+S", "Choose output"),
+            ("Ctrl+Return", "Convert & save"), ("Ctrl+F", "Find & replace"),
+            ("Ctrl+M", "Wrap selection as formula"),
+            ("Ctrl+= / Ctrl+-", "Zoom in / out"), ("Ctrl+0", "Reset zoom"),
+            ("Ctrl+Shift+W", "Toggle word wrap"), ("F2", "Toggle preview"),
+            ("F5", "Refresh preview"), ("F1", "User guide"),
+        ]
+        grid = tk.Frame(body, bg=_BG)
+        grid.pack(fill=X)
+        for row, (keys, desc) in enumerate(shortcuts):
+            tk.Label(grid, text=keys, font=(_MONO, 9), fg=_ACCENT,
+                     bg=_BG).grid(row=row, column=0, sticky=W, padx=(0, 14), pady=1)
+            tk.Label(grid, text=desc, font=("Segoe UI", 9), fg=_MUTED,
+                     bg=_BG).grid(row=row, column=1, sticky=W, pady=1)
+
+        tk.Button(body, text="Close", command=win.destroy,
+                  font=("Segoe UI", 9), fg="white", bg=_ACCENT,
+                  activebackground=_ACCENT_HOV, activeforeground="white",
+                  relief=FLAT, bd=0, padx=18, pady=6, cursor="hand2",
+                  highlightthickness=0).pack(anchor=E, pady=(16, 0))
+        win.focus_set()
+        return win
 
     def _quit(self):
         self._save_settings()
@@ -533,6 +1126,14 @@ class ConverterApp:
         r.bind("<Shift-F3>", lambda e: self._find_next(backwards=True))
         r.bind("<Control-Return>", lambda e: self._start_conversion())
         r.bind("<F5>", lambda e: self._refresh_preview())
+        r.bind("<F2>", lambda e: self._toggle_preview())
+        r.bind("<Control-plus>", lambda e: self._zoom_in())
+        r.bind("<Control-equal>", lambda e: self._zoom_in())
+        r.bind("<Control-minus>", lambda e: self._zoom_out())
+        r.bind("<Control-0>", lambda e: self._zoom_reset())
+        r.bind("<Control-Shift-W>", lambda e: self._toggle_wrap())
+        r.bind("<Control-Shift-w>", lambda e: self._toggle_wrap())
+        r.bind("<F1>", lambda e: self._show_guide())
 
     # ------------------------------------------------------------------
     # Restore persisted settings
@@ -547,6 +1148,10 @@ class ConverterApp:
             except Exception:
                 pass
         self._toggle_eq_format()
+        self._apply_zoom()
+        if self._wrap_enabled:
+            self._toggle_wrap(True)
+        self._update_file_chip()
         self._on_editor_change()
 
     # ------------------------------------------------------------------
@@ -573,11 +1178,12 @@ class ConverterApp:
                 self._current_file = path
                 self._last_open_dir = str(Path(path).parent)
                 self._on_editor_change()
+                self._update_file_chip()
                 # suggest output name
                 stem = Path(path).stem
                 suggested = str(Path(path).parent / f"{stem}.docx")
                 self.output_var.set(suggested)
-                self._log(f"Loaded: {path}")
+                self._log(f"Loaded: {path}", "dim")
             except Exception as exc:
                 messagebox.showerror("Error", f"Could not read file:\n{exc}")
 
@@ -590,10 +1196,18 @@ class ConverterApp:
             pass
 
     def _clear(self):
+        content = self.editor.get("1.0", END).strip()
+        if content:
+            if not messagebox.askyesno(
+                    "Clear Editor",
+                    "Discard the current editor contents?\n"
+                    "This cannot be undone from the menu, but Ctrl+Z may still work."):
+                return
         self.editor.delete("1.0", END)
         self.editor.edit_reset()
         self._current_file = ""
         self._on_editor_change()
+        self._update_file_chip()
 
     def _insert_template(self, _event=None, name=None):
         name = name or self._tpl_var.get()
@@ -629,7 +1243,7 @@ class ConverterApp:
             show = not self._find_visible
         self._find_visible = bool(show)
         if self._find_visible:
-            self.find_frame.pack(fill=X, pady=(0, 4), before=self.editor.master)
+            self.find_frame.pack(fill=X, pady=(0, 6), before=self._ed_card)
             # pre-fill with selection
             try:
                 sel = self.editor.get("sel.first", "sel.last")
@@ -709,10 +1323,57 @@ class ConverterApp:
             self.gutter.yview_moveto(args[0])
         except Exception:
             pass
+        self._schedule_scroll_sync()
 
     def _on_scrollbar(self, *args):
         self.editor.yview(*args)
         self.gutter.yview_moveto(self.editor.yview()[0])
+
+    # ── two-way editor ↔ preview scroll sync ──────────────────────
+    def _schedule_scroll_sync(self):
+        if self._sync_job is not None:
+            try:
+                self.root.after_cancel(self._sync_job)
+            except Exception:
+                pass
+        self._sync_job = self.root.after(50, self._sync_preview_to_editor)
+
+    def _on_preview_scroll(self, first, last):
+        try:
+            self._pv_scroll.set(first, last)
+        except Exception:
+            pass
+        if self._scroll_syncing:
+            return
+        if self._pv_scroll_job is not None:
+            try:
+                self.root.after_cancel(self._pv_scroll_job)
+            except Exception:
+                pass
+        self._pv_scroll_job = self.root.after(80, self._sync_editor_to_preview)
+
+    def _sync_editor_to_preview(self):
+        """Scroll the editor to the source line nearest the preview's top."""
+        self._pv_scroll_job = None
+        if not self._preview_line_index:
+            return
+        try:
+            top = float(self.preview.index("@2,2"))
+        except Exception:
+            return
+        best = None
+        for line, pidx in self._preview_line_index:
+            if float(pidx) <= top:
+                best = line
+            else:
+                break
+        if best is None:
+            return
+        try:
+            n = max(1, int(self.editor.index("end-1c").split(".")[0]))
+            self.editor.yview_moveto(min(1.0, max(0.0, (best - 1) / n)))
+        except Exception:
+            pass
 
     def _on_editor_change(self, _event=None):
         text = self.editor.get("1.0", END)
@@ -823,6 +1484,8 @@ class ConverterApp:
         words = len(re.findall(r"\S+", text.rstrip("\n")))
         chars = len(text.rstrip("\n"))
         self._update_status(words, chars)
+        self._update_placeholder(text)
+        self._update_file_chip()
         self._schedule_preview_refresh()
 
     def _update_status(self, words=None, chars=None):
@@ -949,6 +1612,7 @@ class ConverterApp:
 
     def _sync_preview_to_editor(self):
         """Scroll the preview to the block nearest the editor's top line."""
+        self._sync_job = None
         if not self._preview_line_index:
             return
         try:
@@ -961,10 +1625,16 @@ class ConverterApp:
                 target = pidx
             else:
                 break
+        self._scroll_syncing = True
         try:
             self.preview.see(target)
         except Exception:
             pass
+        finally:
+            self.root.after_idle(self._end_scroll_sync)
+
+    def _end_scroll_sync(self):
+        self._scroll_syncing = False
 
     # ------------------------------------------------------------------
     # Formula repair helpers: wrap-as-formula + Formula Inspector
@@ -1001,7 +1671,7 @@ class ConverterApp:
         win = Toplevel(self.root)
         win.title("Formula Inspector")
         win.transient(self.root)
-        win.configure(bg=BG)
+        win.configure(bg=_BG)
         win.geometry("620x460")
         win.grab_set()
 
@@ -1011,9 +1681,12 @@ class ConverterApp:
         ttk.Label(outer, text="Formula source  (edit freely — partial detections, "
                               "double spaces and stray periods are tolerated)",
                   style="Subtitle.TLabel").pack(anchor=W)
-        src = Text(outer, height=4, wrap=WORD, font=("Consolas", 11),
-                   bg="#fff7ed", relief=FLAT, borderwidth=1, padx=6, pady=4)
-        src.pack(fill=X, pady=(4, 10))
+        src = Text(outer, height=4, wrap=WORD, font=(_MONO, 11),
+                   bg=_SURFACE, fg=_INK, insertbackground=_INK,
+                   relief=FLAT, borderwidth=0, padx=10, pady=8,
+                   highlightbackground=_BORDER, highlightcolor=_ACCENT,
+                   highlightthickness=1)
+        src.pack(fill=X, pady=(6, 12))
 
         # pre-fill: selection → clicked span → current line
         initial = ""
@@ -1029,9 +1702,11 @@ class ConverterApp:
         ttk.Label(outer, text="Normalized / pretty form:",
                   style="Subtitle.TLabel").pack(anchor=W)
         norm_var = StringVar()
-        ttk.Label(outer, textvariable=norm_var, font=("Georgia", 12, "bold"),
-                  foreground="#1d4ed8", wraplength=570,
-                  background="#ffffff", padding=8).pack(fill=X, pady=(4, 10))
+        ttk.Label(outer, textvariable=norm_var, font=(_SERIF, 12, "bold"),
+                  foreground=_ACCENT, wraplength=570,
+                  background=_SURFACE, padding=10,
+                  relief=FLAT, borderwidth=1,
+                  anchor=W).pack(fill=X, pady=(6, 10))
 
         status_var = StringVar()
         status_lbl = ttk.Label(outer, textvariable=status_var,
@@ -1048,8 +1723,7 @@ class ConverterApp:
             from gui.preview_render import latex_to_pretty
             norm_var.set(latex_to_pretty(norm))
             try:
-                from docx.oxml.ns import qn as _qn  # noqa: F401
-                ok = bool(LatexToWordConverter().latex_to_omml(norm))
+                ok = self.converter.latex_to_omml(norm) is not None
             except Exception:
                 ok = False
             if ok:
@@ -1084,9 +1758,16 @@ class ConverterApp:
             self._on_editor_change()
             win.destroy()
 
-        ttk.Button(btns, text="Insert as  $formula$",
-                   style="Accent.TButton",
-                   command=lambda: finish("inline")).pack(side=LEFT, padx=4)
+        def make_accent_btn(text, command):
+            b = tk.Button(btns, text=text, command=command,
+                          font=("Segoe UI Semibold", 9), fg="white", bg=_ACCENT,
+                          activebackground=_ACCENT_HOV, activeforeground="white",
+                          relief=FLAT, bd=0, padx=14, pady=6, cursor="hand2",
+                          highlightthickness=0)
+            b.pack(side=LEFT, padx=4)
+            return b
+
+        make_accent_btn("Insert as  $formula$", lambda: finish("inline"))
         ttk.Button(btns, text="Insert as display  $$…$$",
                    command=lambda: finish("display")).pack(side=LEFT, padx=4)
         ttk.Button(btns, text="Mark as code (skip math)",
@@ -1132,10 +1813,10 @@ class ConverterApp:
 
         # disable button, start progress
         self._busy = True
-        self.convert_btn.configure(state=DISABLED)
+        self.convert_btn.configure(state=DISABLED, text="⏳  Converting…")
         self._post_frame.pack_forget()
         self.progress.start(12)
-        self._log("Converting…")
+        self._log("Converting…", "dim")
 
         t = threading.Thread(
             target=self._conversion_worker,
@@ -1164,7 +1845,8 @@ class ConverterApp:
                 kind, payload = self.msg_queue.get_nowait()
                 self.progress.stop()
                 self._busy = False
-                self.convert_btn.configure(state=NORMAL)
+                self.convert_btn.configure(
+                    state=NORMAL, text="⚡  Convert & Save    Ctrl+↵")
 
                 if kind == "ok":
                     stats = payload
@@ -1175,18 +1857,18 @@ class ConverterApp:
                     self._log(
                         f"✅ Success! {ok}/{total} equations converted"
                         f"{f' ({fail} failed)' if fail else ''}. "
-                        f"Saved to: {stats['output_path']}"
-                    )
+                        f"Saved to: {stats['output_path']}",
+                        "ok" if not fail else "warn")
                     for item in stats.get("failed_formulas", []):
                         self._log(
                             f"   ⚠ line {item['line']}: could not convert "
-                            f"{item['latex']!r} — kept as plain text"
-                        )
+                            f"{item['latex']!r} — kept as plain text",
+                            "warn")
                     self._post_frame.pack(side=RIGHT)
                     if self.autopen_var.get():
                         self._open_output_file()
                 else:
-                    self._log(f"❌ Error: {payload}")
+                    self._log(f"❌ Error: {payload}", "err")
                     messagebox.showerror("Conversion Error", str(payload))
         except queue.Empty:
             pass
@@ -1208,9 +1890,10 @@ class ConverterApp:
     # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
-    def _log(self, msg: str):
+    def _log(self, msg: str, kind: str = None):
         self.log.configure(state=NORMAL)
-        self.log.insert(END, msg + "\n")
+        tags = (kind,) if kind else ()
+        self.log.insert(END, msg + "\n", tags)
         self.log.see(END)
         self.log.configure(state=DISABLED)
 

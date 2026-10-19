@@ -254,16 +254,30 @@ def render_document(text: str,
             j = i
             while j + 1 < len(lines) and (j + 1) in disp:
                 j += 1
+            # a prose prefix before the opener stays prose in the preview
+            head = lines[i].strip()
+            lead = len(lines[i]) - len(lines[i].lstrip())
+            offset = 0
+            if not head.startswith("$$"):
+                k = head.find("$$")
+                if k > 0:
+                    offset = lead + k
+                    blocks.append({"kind": "paragraph", "line": i + 1,
+                                   "runs": runs_for_line(
+                                       lines[i][:offset], i + 1)})
             raw = " ".join(
-                ln.strip().strip("$").strip()
-                for ln in lines[i:j + 1] if ln.strip())
+                part for part in (
+                    (lines[i][offset:] if ln is lines[i] else ln)
+                    .strip().strip("$").strip()
+                    for ln in lines[i:j + 1])
+                if part)
             eq_no += 1
             label = (eq_format.replace("{n}", str(eq_no))
                      if number_equations else None)
             blocks.append({"kind": "display", "line": i + 1,
                            "text": raw, "pretty": latex_to_pretty(raw),
                            "label": label,
-                           "src": (i + 1, 0, len(line)),
+                           "src": (i + 1, offset, len(line)),
                            "runs": []})
             i = j + 1
             continue

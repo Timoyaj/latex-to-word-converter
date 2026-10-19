@@ -58,6 +58,32 @@ def _resolve_xsl() -> Optional[str]:
     return None
 
 
+# Single-character accent scripts that MML2OMML.XSL maps to combining
+# marks (see its ToUpperCombining template).  latex2mathml stopped emitting
+# accent="true" on these <mover> scripts, so the XSLT would otherwise fall
+# back to m:limUpp instead of a native Word accent (m:acc).
+# Note: U+00AF (macron) is deliberately absent — the XSL's FIsBar claims
+# macron/overline movers first and maps them to m:bar.
+_ACCENT_MO_CHARS = frozenset(
+    "\u02d8\u00b8\u0060\u002e\u02d9\u02dd\u00b4\u007e\u02dc"
+    "\u00a8\u02c7\u005e\u002d\u2212\u2192\u27f6\u2190")
+_MML_NS = "{http://www.w3.org/1998/Math/MathML}"
+
+
+def _mark_mathml_accents(mathml_tree):
+    """Mark known accent <mover> scripts with accent="true" for the XSLT."""
+    for mover in mathml_tree.iter(_MML_NS + "mover"):
+        children = list(mover)
+        if len(children) == 2:
+            second = children[1]
+            if (second.tag == _MML_NS + "mo"
+                    and second.text
+                    and len(second.text) == 1
+                    and second.text in _ACCENT_MO_CHARS):
+                mover.set("accent", "true")
+    return mathml_tree
+
+
 # ---------------------------------------------------------------------------
 # Converter class
 # ---------------------------------------------------------------------------
@@ -176,20 +202,35 @@ class LatexToWordConverter:
                 i += 1; continue
 
             # ── display math opener: $$...$$ ──────────────────────
-            if stripped.startswith("$$"):
-                flush_paragraph()
-                rest = stripped[2:].strip()
-                if rest.endswith("$$") and len(rest) > 2:
-                    # single-line $$...$$
-                    self._add_display_equation(
-                        doc, rest[:-2].strip(), number_equations, eq_format)
-                elif not rest.endswith("$$"):
-                    # multi-line: accumulate until closing $$
-                    in_display_math = True
-                    display_close = "$$"
-                    display_math_buf = [rest] if rest else []
-                # else: bare "$$  $$" empty pair — skip
-                i += 1; continue
+            # a mid-line opener after prose ("and $$ … $$") splits the
+            # prefix off as its own paragraph first
+            if "$$" in stripped and not stripped.startswith(("|", "#", "-", "*", ">")):
+                idx = stripped.find("$$")
+                if idx > 0 and (stripped[idx - 1].isspace()
+                                or not stripped[idx - 1].isalnum()):
+                    rest_after = stripped[idx + 2:].strip()
+                    if not rest_after or (
+                            rest_after.endswith("$$")
+                            and "$$" not in rest_after[:-2]
+                            and rest_after[:-2].strip()):
+                        flush_paragraph()
+                        prefix = stripped[:idx].strip()
+                        if prefix:
+                            self.add_formatted_paragraph(doc, prefix)
+                        stripped = stripped[idx:].strip()
+                if stripped.startswith("$$"):
+                    rest = stripped[2:].strip()
+                    if rest.endswith("$$") and len(rest) > 2:
+                        # single-line $$...$$
+                        self._add_display_equation(
+                            doc, rest[:-2].strip(), number_equations, eq_format)
+                    elif not rest.endswith("$$"):
+                        # multi-line: accumulate until closing $$
+                        in_display_math = True
+                        display_close = "$$"
+                        display_math_buf = [rest] if rest else []
+                    # else: bare "$$  $$" empty pair — skip
+                    i += 1; continue
 
             # ── display math opener: \[ ... \] ────────────────────
             if stripped.startswith("\\["):
@@ -306,6 +347,7 @@ class LatexToWordConverter:
             try:
                 mathml_str = latex2mathml_convert(attempt)
                 mathml_tree = etree.fromstring(mathml_str.encode("utf-8"))
+                _mark_mathml_accents(mathml_tree)
                 omml_tree = self.transform(mathml_tree)
                 omml_root = omml_tree.getroot()
 
